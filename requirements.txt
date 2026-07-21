@@ -1,0 +1,7 @@
+anthropic
+datasets
+chromadb
+sentence-transformers
+streamlit
+matplotlib
+numpy
