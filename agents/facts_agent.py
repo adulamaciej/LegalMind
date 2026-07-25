@@ -1,21 +1,9 @@
-import os
 import json
 from anthropic import Anthropic
+from config import ARTICLES_MAP, ARTICLE_CODES
 
 client = Anthropic()
 
-ARTICLES_MAP = {
-    0: "Article 2 (right to life)",
-    1: "Article 3 (prohibition of torture)",
-    2: "Article 5 (right to liberty)",
-    3: "Article 6 (right to fair trial)",
-    4: "Article 8 (right to private/family life)",
-    5: "Article 9 (freedom of thought)",
-    6: "Article 10 (freedom of expression)",
-    7: "Article 11 (freedom of assembly)",
-    8: "Article 14 (prohibition of discrimination)",
-    9: "P1-1 (protection of property)"
-}
 
 def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str]:
     """
@@ -41,7 +29,7 @@ EXCERPT:
 Provide a concise but complete summary (aim for ~30% of original length):"""
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",  # fix this model name too
+            model="claude-sonnet-5",  # fix this model name too
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -76,7 +64,7 @@ Extract and return ONLY a JSON object with these fields:
 Return ONLY the JSON, no other text."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -101,4 +89,5 @@ if __name__ == "__main__":
     print("=== EXTRACTED FACTS ===")
     print(json.dumps(facts, indent=2))
     print("\n=== GROUND TRUTH ===")
-    print([ARTICLES_MAP[l] for l in case['labels']])
+    print([ARTICLES_MAP[ARTICLE_CODES[l]] for l in case['labels']])
+

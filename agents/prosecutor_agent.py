@@ -1,4 +1,3 @@
-import os
 import json
 from anthropic import Anthropic
 
@@ -47,7 +46,7 @@ Show why their arguments are weak or incorrect.
 Strengthen your position that human rights WERE violated."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=800,
         messages=[{"role": "user", "content": prompt}]
     )

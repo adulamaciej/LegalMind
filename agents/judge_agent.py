@@ -1,21 +1,8 @@
-import os
 import json
 from anthropic import Anthropic
+from config import ARTICLES_MAP
 
 client = Anthropic()
-
-ARTICLES_MAP = {
-    "2": "Article 2 (right to life)",
-    "3": "Article 3 (prohibition of torture)",
-    "5": "Article 5 (right to liberty)",
-    "6": "Article 6 (right to fair trial)",
-    "8": "Article 8 (right to private/family life)",
-    "9": "Article 9 (freedom of thought)",
-    "10": "Article 10 (freedom of expression)",
-    "11": "Article 11 (freedom of assembly)",
-    "14": "Article 14 (prohibition of discrimination)",
-    "P1-1": "P1-1 (protection of property)"
-}
 
 def judge_verdict(
     case_facts: dict,
@@ -65,12 +52,24 @@ Return ONLY a JSON object with these fields:
 Return ONLY the JSON, no other text."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}]
     )
-    
-    result = json.loads(response.content[0].text)
+
+    text_response = response.content[0].text.strip()
+    if text_response.startswith("```"):
+
+        text_response = text_response.split("```")[1]
+    if text_response.startswith("json"):
+        text_response = text_response[4:]
+    text_response = text_response.strip()
+
+    try:
+        result = json.loads(text_response)
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse JSON: {e}\nRaw response: {text_response}")
+    raise
     return result
 
 

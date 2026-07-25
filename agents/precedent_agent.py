@@ -1,4 +1,3 @@
-import os
 from anthropic import Anthropic
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
@@ -54,7 +53,7 @@ How should these precedents influence the current case analysis?
 Provide a concise analysis in 3-4 sentences."""
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}]
         )

@@ -1,4 +1,3 @@
-import os
 import json
 from anthropic import Anthropic
 
@@ -22,7 +21,7 @@ Structure your argument as:
 4. Conclusion"""
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=800,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -47,7 +46,7 @@ Maintain your position that human rights were NOT violated.
 This is your final statement — make it count."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=800,
         messages=[{"role": "user", "content": prompt}]
     )
