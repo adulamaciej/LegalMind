@@ -17,9 +17,41 @@ ARTICLES_MAP = {
     9: "P1-1 (protection of property)"
 }
 
+def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str]:
+    """
+    For cases too long to fit directly, summarize in chunks
+    to preserve information from the entire case, not just the start.
+    """
+    if len(paragraphs) <= 50:
+        return paragraphs  # no summarization needed
+
+    # split into chunks
+    chunks = [paragraphs[i:i+chunk_size] for i in range(0, len(paragraphs), chunk_size)]
+    
+    summarized_chunks = []
+    for chunk in chunks:
+        text = "\n".join(chunk)
+        prompt = f"""Summarize the following excerpt from an ECHR case's factual background.
+Preserve all specific events, dates, and details relevant to potential human rights violations.
+Do not omit procedural steps, medical/legal findings, or testimony.
+
+EXCERPT:
+{text}
+
+Provide a concise but complete summary (aim for ~30% of original length):"""
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",  # fix this model name too
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        summarized_chunks.append(response.content[0].text)
+
+    return summarized_chunks  # now feed this into extract_facts()
+
+
 def extract_facts(case_paragraphs: list[str]) -> dict:
-    if len(case_paragraphs) > 50:
-        case_paragraphs = case_paragraphs[:50]
+    case_paragraphs = summarize_long_case(case_paragraphs)
     
     text = "\n".join([f"{i+1}. {p}" for i, p in enumerate(case_paragraphs)])
     
@@ -56,9 +88,7 @@ Return ONLY the JSON, no other text."""
             text_response = text_response[4:]
     text_response = text_response.strip()
     
-    result = json.loads(text_response)
-    text_response = text_response.strip()
-    print("RAW RESPONSE:", text_response) 
+
     result = json.loads(text_response)
     return result
 
