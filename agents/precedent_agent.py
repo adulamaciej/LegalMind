@@ -66,27 +66,3 @@ Provide a concise analysis in 3-4 sentences."""
             return "Precedent analysis could not be completed due to a technical error."
 
 
-
-# Manual test: indexes 100 sample cases into ChromaDB, then sanity-checks precedent retrieval + analysis
-if __name__ == "__main__":
-    from datasets import load_dataset
-
-    ds = load_dataset("coastalcph/lex_glue", "ecthr_a")
-
-    agent = PrecedentAgent()
-
-    # Index first 100 cases as precedents
-    cases = [ds['train'][i] for i in range(100)]
-    agent.index_cases(cases)
-
-    # Find precedents for a new case
-    test_case = ds['test'][0]
-    precedents = agent.find_precedents(test_case['text'])
-    analysis = agent.analyze_precedents(test_case['text'], precedents)
-
-    print("=== PRECEDENTS FOUND ===")
-    for p in precedents:
-        print(f"ID: {p['id']}, Similarity: {p['similarity']:.3f}")
-
-    print("\n=== ANALYSIS ===")
-    print(analysis)

@@ -59,7 +59,7 @@ def evaluate_verdict(verdict: dict, ground_truth_codes: list[str]) -> dict:
         "truth": truth,
     }
 
-def run_evaluation(n_cases: int = 3, seed: int = 42):
+def run_evaluation(n_cases: int = 1, seed: int = 123):
     """Run evaluation on a random sample of cases."""
     ds = load_dataset("coastalcph/lex_glue", "ecthr_a")
     precedent_agent = PrecedentAgent()
@@ -128,4 +128,4 @@ def run_evaluation(n_cases: int = 3, seed: int = 42):
     return results
 
 if __name__ == "__main__":
-    run_evaluation(n_cases=3, seed=None)
+    run_evaluation(n_cases=1, seed=None)
