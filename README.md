@@ -1,6 +1,9 @@
 # ⚖️ LegalMind — Multi-Agent System for ECHR Case Analysis
 
-🔗 **Live demo:** [legalmind.streamlit.app](https://legalmind-adulamaciej.streamlit.app)
+![Tests](https://github.com/adulamaciej/LegalMind/actions/workflows/tests.yml/badge.svg)
+
+
+🔗 **Live demo:** [legalmind-adulamaciej.streamlit.app](https://legalmind-adulamaciej.streamlit.app)
 
 Multi-agent LLM system simulating a legal debate and delivering a verdict on European Court of Human Rights (ECHR) cases, built on the Claude API. Combines RAG-based precedent retrieval with an adversarial prosecutor/defender debate, culminating in a judge agent's ruling.
 
@@ -68,6 +71,7 @@ streamlit run app.py              # Web UI
 python main.py --example 5        # CLI: dataset example
 python main.py --text "..."       # CLI: custom case
 python evaluation.py              # Run evaluation
+pytest tests/ -v                  # Run unit tests
 ```
 
 

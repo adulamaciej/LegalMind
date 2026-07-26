@@ -5,7 +5,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from config import extract_text, ARTICLE_CODES, ARTICLES_MAP
-from evaluation import evaluate_verdict
+from evaluation.evaluation import evaluate_verdict
 
 
 # --- extract_text tests ---
