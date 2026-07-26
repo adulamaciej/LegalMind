@@ -1,5 +1,7 @@
 # ⚖️ LegalMind — Multi-Agent System for ECHR Case Analysis
 
+🔗 **Live demo:** [legalmind.streamlit.app](https://legalmind-adulamaciej.streamlit.app)
+
 Multi-agent LLM system simulating a legal debate and delivering a verdict on European Court of Human Rights (ECHR) cases, built on the Claude API. Combines RAG-based precedent retrieval with an adversarial prosecutor/defender debate, culminating in a judge agent's ruling.
 
 ## Overview

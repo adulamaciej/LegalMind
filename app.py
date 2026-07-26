@@ -2,7 +2,16 @@ import streamlit as st
 from datasets import load_dataset
 from config import ARTICLE_CODES
 from pipeline.orchestrator import run_pipeline
+import os
 
+if not os.path.exists("./data/chroma"):
+    st.info("First-time setup: indexing precedent database, this may take a few minutes...")
+    from datasets import load_dataset
+    from rag.indexer import get_collection, index_cases
+    ds = load_dataset("coastalcph/lex_glue", "ecthr_a")
+    collection = get_collection()
+    index_cases(list(ds['train']), collection)
+    st.success("Setup complete!")
 
 st.set_page_config(
     page_title="LegalMind — ECHR Analysis",
