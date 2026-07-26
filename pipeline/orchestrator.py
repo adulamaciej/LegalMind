@@ -2,8 +2,7 @@ from agents.facts_agent import extract_facts
 from agents.precedent_agent import PrecedentAgent
 from agents.prosecutor_agent import prosecutor_argue, prosecutor_rebut
 from agents.defender_agent import defender_argue, defender_respond
-from agents.judge_agent import judge_verdict, format_verdict
-
+from agents.judge_agent import judge_verdict
 
 def run_pipeline(case_paragraphs: list[str]) -> dict:
 
@@ -22,7 +21,7 @@ def run_pipeline(case_paragraphs: list[str]) -> dict:
     # STEP 1: Facts Extraction Agent
     print("\n📋 [1/5] Facts Agent — extracting facts...")
     facts = extract_facts(case_paragraphs)
-    print(f"✅ Facts extracted: {facts['summary']}")
+    print(f"✅ Facts extracted: {facts.get('summary', 'summary unavailable')}")
 
     
     # STEP 2: Precedent Agent (RAG)
@@ -85,11 +84,8 @@ def run_pipeline(case_paragraphs: list[str]) -> dict:
             "defender_final_response": defender_final
         },
         "verdict": verdict,
-        "formatted_verdict": format_verdict(verdict)
     }
-    
-
-    print(result['formatted_verdict'])
+    print(f"\n⚖️ Verdict: {'VIOLATION' if verdict.get('violation') else 'NO VIOLATION'} (confidence: {verdict.get('confidence_score', 'N/A')}%)")
     return result
 
 

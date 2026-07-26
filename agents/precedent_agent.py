@@ -52,14 +52,20 @@ How should these precedents influence the current case analysis?
 
 Provide a concise analysis in 3-4 sentences."""
 
-        response = client.messages.create(
+        try:
+            response = client.messages.create(
             model="claude-sonnet-5",
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text
+            return response.content[0].text
+        except Exception as e:
+            print(f"Precedent analysis failed: {e}")
+            return "Precedent analysis could not be completed due to a technical error."
 
 
+
+# Manual test: indexes 100 sample cases into ChromaDB, then sanity-checks precedent retrieval + analysis
 if __name__ == "__main__":
     from datasets import load_dataset
 

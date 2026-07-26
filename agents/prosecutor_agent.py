@@ -20,12 +20,18 @@ Structure your argument as:
 3. Relevant precedents supporting your position
 4. Conclusion"""
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.content[0].text
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"Prosecutor argument failed: {e}")
+        return "The prosecution was unable to present arguments due to a technical error."
+
+
 
 
 def prosecutor_rebut(case_facts: dict, precedents: str, defender_arguments: str) -> str:
@@ -45,9 +51,13 @@ Rebut the defender's arguments point by point.
 Show why their arguments are weak or incorrect.
 Strengthen your position that human rights WERE violated."""
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.content[0].text
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"Prosecutor rebuttal failed: {e}")
+        return "The prosecution was unable to rebut due to a technical error."

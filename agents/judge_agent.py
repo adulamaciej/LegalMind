@@ -4,6 +4,7 @@ from config import ARTICLES_MAP
 
 client = Anthropic()
 
+
 def judge_verdict(
     case_facts: dict,
     precedents: str,
@@ -69,29 +70,5 @@ Return ONLY the JSON, no other text."""
         result = json.loads(text_response)
     except json.JSONDecodeError as e:
         print(f"Failed to parse JSON: {e}\nRaw response: {text_response}")
-    raise
+        raise
     return result
-
-
-def format_verdict(verdict: dict) -> str:
-    violation_str = "VIOLATION FOUND" if verdict['violation'] else "NO VIOLATION"
-    articles = ", ".join([
-        ARTICLES_MAP.get(a, a) for a in verdict.get('violated_articles', [])
-    ])
-    
-    output = f"""
-╔════════════════════════════════════════╗
-║           ECHR COURT VERDICT           ║
-╚════════════════════════════════════════╝
-
-VERDICT: {violation_str}
-VIOLATED ARTICLES: {articles if articles else 'None'}
-CONFIDENCE SCORE: {verdict['confidence_score']}%
-
-REASONING:
-{verdict['reasoning']}
-
-KEY FACTORS:
-{chr(10).join([f"• {f}" for f in verdict.get('key_factors', [])])}
-"""
-    return output

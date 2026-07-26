@@ -2,66 +2,71 @@ import json
 from anthropic import Anthropic
 from config import ARTICLES_MAP, ARTICLE_CODES
 
+
 client = Anthropic()
 
 
+# helper function
 def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str]:
+
     """
-    For cases too long to fit directly, summarize in chunks
-    to preserve information from the entire case, not just the start.
+    For cases too long to fit directly, summarizing in chunks
+    to preserve information from the entire case.
     """
+
     if len(paragraphs) <= 50:
         return paragraphs  # no summarization needed
 
-    # split into chunks
+    # spliting into chunks
     chunks = [paragraphs[i:i+chunk_size] for i in range(0, len(paragraphs), chunk_size)]
     
     summarized_chunks = []
     for chunk in chunks:
         text = "\n".join(chunk)
         prompt = f"""Summarize the following excerpt from an ECHR case's factual background.
-Preserve all specific events, dates, and details relevant to potential human rights violations.
-Do not omit procedural steps, medical/legal findings, or testimony.
+                Preserve all specific events, dates, and details relevant to potential human rights violations.
+                Do not omit procedural steps, medical/legal findings, or testimony.
 
-EXCERPT:
-{text}
+                EXCERPT:
+                {text}
 
-Provide a concise but complete summary (aim for ~30% of original length):"""
+                Provide a concise but complete summary (aim for ~30% of original length):"""
 
         response = client.messages.create(
-            model="claude-sonnet-5",  # fix this model name too
+            model="claude-sonnet-5",
             max_tokens=1000,
             messages=[{"role": "user", "content": prompt}]
         )
         summarized_chunks.append(response.content[0].text)
 
-    return summarized_chunks  # now feed this into extract_facts()
+    return summarized_chunks
 
 
+# main function
 def extract_facts(case_paragraphs: list[str]) -> dict:
     case_paragraphs = summarize_long_case(case_paragraphs)
     
     text = "\n".join([f"{i+1}. {p}" for i, p in enumerate(case_paragraphs)])
     
     prompt = f"""You are a legal clerk at the European Court of Human Rights.
-Analyze the following case facts and extract structured information.
+            Analyze the following case facts and extract structured information.
 
-CASE FACTS:
-{text}
+            CASE FACTS:
+            {text}
 
-Extract and return ONLY a JSON object with these fields:
-{{
-    "parties": {{
-        "applicant": "description of applicant(s)",
-        "respondent_state": "country being sued"
-    }},
-    "key_events": ["list of key events in chronological order"],
-    "alleged_violations": ["list of potential human rights violations"],
-    "relevant_articles": ["list of ECHR articles potentially violated"],
-    "summary": "2-3 sentence summary of the case"
-}}
+            Extract and return ONLY a JSON object with these fields:
+        {{
+            "parties": {{
+                "applicant": "description of applicant(s)",
+                "respondent_state": "country being sued"
+            }},
+            "key_events": ["list of key events in chronological order"],
+            "alleged_violations": ["list of potential human rights violations"],
+            "relevant_articles": ["list of ECHR articles potentially violated"],
+            "summary": "2-3 sentence summary of the case"
+        }}
 
-Return ONLY the JSON, no other text."""
+        Return ONLY the JSON, no other text."""
 
     response = client.messages.create(
         model="claude-sonnet-5",
@@ -81,6 +86,7 @@ Return ONLY the JSON, no other text."""
     return result
 
 
+# Manual test: sanity-check extraction on one example case
 if __name__ == "__main__":
     from datasets import load_dataset
     ds = load_dataset("coastalcph/lex_glue", "ecthr_a")

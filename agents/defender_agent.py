@@ -20,12 +20,16 @@ Structure your argument as:
 3. Relevant precedents supporting your position
 4. Conclusion"""
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.content[0].text
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"Defender argument failed: {e}")
+        return "The defense was unable to present arguments due to a technical error."
 
 
 def defender_respond(case_facts: dict, precedents: str, prosecutor_rebuttal: str) -> str:
@@ -45,9 +49,13 @@ Respond to the prosecutor's rebuttal.
 Maintain your position that human rights were NOT violated.
 This is your final statement — make it count."""
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.content[0].text
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+    except Exception as e:
+        print(f"Defender response failed: {e}")
+        return "The defense was unable to respond due to a technical error."
