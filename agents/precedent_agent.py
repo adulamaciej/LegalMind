@@ -2,6 +2,7 @@ from anthropic import Anthropic
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
 from config import extract_text
+from config import MODEL
 
 client = Anthropic()
 
@@ -55,7 +56,7 @@ Provide a concise analysis in 3-4 sentences."""
 
         try:
             response = client.messages.create(
-            model="claude-sonnet-5",
+            model=MODEL,
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}]
         )

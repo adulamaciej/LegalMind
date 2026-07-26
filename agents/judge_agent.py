@@ -2,6 +2,7 @@ import json
 from anthropic import Anthropic
 from config import ARTICLES_MAP
 from config import extract_text
+from config import MODEL, ARTICLE_CODES
 
 client = Anthropic()
 
@@ -33,7 +34,9 @@ def judge_verdict(
 === DEFENDER FINAL RESPONSE ===
 {defender_response}
 """
-
+    
+    # The model hallucinated and used article 14 which does not exist in this dataset so explicitly listing allowed articles here
+    allowed_articles = ", ".join(f"'{code}'" for code in ARTICLE_CODES)
     prompt = f"""You are a judge at the European Court of Human Rights.
 You have read the full transcript of the debate between prosecutor and defender.
 
@@ -42,10 +45,13 @@ FULL TRANSCRIPT:
 
 Based on the facts, precedents, and arguments presented, deliver your verdict.
 
+IMPORTANT: "violated_articles" must ONLY contain codes from this exact list: {allowed_articles}
+Do not invent or use any article code outside this list.
+
 Return ONLY a JSON object with these fields:
 {{
     "violation": true or false,
-    "violated_articles": ["list of violated ECHR articles, e.g. '6', '8', 'P1-1'"],
+    "violated_articles": ["list of violated ECHR articles, using ONLY codes from: {allowed_articles}"],
     "confidence_score": 0-100,
     "reasoning": "detailed explanation of the verdict",
     "key_factors": ["list of key factors that influenced the decision"]
@@ -54,7 +60,7 @@ Return ONLY a JSON object with these fields:
 Return ONLY the JSON, no other text."""
 
     response = client.messages.create(
-        model="claude-sonnet-5",
+        model=MODEL,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )

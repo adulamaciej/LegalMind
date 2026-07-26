@@ -1,5 +1,6 @@
 import json
 from config import extract_text
+from config import MODEL
 from anthropic import Anthropic
 
 client = Anthropic()
@@ -52,7 +53,7 @@ This is your final statement — make it count."""
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-5",
+            model=MODEL,
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )

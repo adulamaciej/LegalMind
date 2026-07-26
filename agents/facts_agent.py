@@ -2,6 +2,7 @@ import json
 from anthropic import Anthropic
 from config import ARTICLES_MAP, ARTICLE_CODES
 from config import extract_text
+from config import MODEL
 
 
 client = Anthropic()
@@ -34,7 +35,7 @@ def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str
                 Provide a concise but complete summary (aim for ~30% of original length):"""
 
         response = client.messages.create(
-            model="claude-sonnet-5",
+            model=MODEL,
             max_tokens=3000,
             messages=[{"role": "user", "content": prompt}]
         )

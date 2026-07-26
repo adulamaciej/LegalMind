@@ -1,6 +1,7 @@
 import json
 from anthropic import Anthropic
 from config import extract_text
+from config import MODEL
 
 client = Anthropic()
 
@@ -23,7 +24,7 @@ Structure your argument as:
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-5",
+            model=MODEL,
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )

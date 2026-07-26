@@ -1,4 +1,12 @@
+import os
+
+
 ARTICLE_CODES = ['2', '3', '5', '6', '8', '9', '10', '11', '14', 'P1-1']  # dataset label index → article code
+
+
+# Model configuration
+MODEL = os.getenv("LEGALMIND_MODEL", "claude-haiku-4-5-20251001")
+
 
 ARTICLES_MAP = {
     "2": "Article 2 (right to life)",
