@@ -3,6 +3,7 @@ from anthropic import Anthropic
 from config import ARTICLES_MAP
 from config import extract_text
 from config import MODEL, ARTICLE_CODES
+from collections import defaultdict
 
 client = Anthropic()
 
@@ -48,6 +49,16 @@ Based on the facts, precedents, and arguments presented, deliver your verdict.
 IMPORTANT: "violated_articles" must ONLY contain codes from this exact list: {allowed_articles}
 Do not invent or use any article code outside this list.
 
+Example of CORRECT format: ["6", "8"]
+Example of INCORRECT format: ["13", "15"] — these codes do not exist and must never be used
+
+Only include an article in "violated_articles" if there is strong, direct evidence
+of a violation. Do not include articles based on speculation, tangential connections,
+or weak circumstantial evidence. When in doubt, exclude the article rather than include it.
+
+Most ECHR cases involve a single article violation. Multiple violations should only
+be reported when there is clear, independent evidence for each one.
+
 Return ONLY a JSON object with these fields:
 {{
     "violation": true or false,
@@ -78,4 +89,11 @@ Return ONLY the JSON, no other text."""
     except json.JSONDecodeError as e:
         print(f"Failed to parse JSON: {e}\nRaw response: {text_response}")
         raise
+    result['violated_articles'] = [a for a in result.get('violated_articles', []) if a in ARTICLE_CODES]
+
+
+    CONFIDENCE_THRESHOLD = 70
+    if result.get('confidence_score', 0) < CONFIDENCE_THRESHOLD:
+        print(f"Warning: low confidence ({result.get('confidence_score')}%) — verdict may be unreliable")
+
     return result
