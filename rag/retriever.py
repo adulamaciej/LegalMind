@@ -1,3 +1,5 @@
+# Searches ChromaDB for similar cases, returns them ranked
+
 def find_similar_cases(query_paragraphs: list[str], collection, n_results: int = 3) -> list[dict]:
 
     """

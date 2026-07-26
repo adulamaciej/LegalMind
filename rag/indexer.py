@@ -1,6 +1,7 @@
 import chromadb
 
 
+# ChromaDB database on a disk
 def get_collection(path: str = "./data/chroma", collection_name: str = "echr_cases"):
 
     """Initialize and return ChromaDB collection."""
@@ -10,6 +11,7 @@ def get_collection(path: str = "./data/chroma", collection_name: str = "echr_cas
     return collection
 
 
+# Preparing and adding ECHR cases to ChromaDB
 def index_cases(cases: list[dict], collection) -> None:
 
     """
@@ -35,6 +37,7 @@ def index_cases(cases: list[dict], collection) -> None:
     print(f"Indexed {len(cases)} cases into ChromaDB.")
 
 
+# Indexes training cases into ChromaDB
 if __name__ == "__main__":
     from datasets import load_dataset
 

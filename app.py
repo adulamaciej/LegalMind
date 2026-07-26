@@ -1,5 +1,6 @@
 import streamlit as st
 from datasets import load_dataset
+from config import ARTICLE_CODES
 from pipeline.orchestrator import run_pipeline
 
 st.set_page_config(
@@ -42,7 +43,7 @@ else:
     
     if st.button("Submit Case"):
         if custom_text:
-            st.session_state['paragraphs'] = custom_text.split(". ")
+            st.session_state['paragraphs'] = [p.strip() for p in custom_text.split("\n") if p.strip()]
             st.session_state['ground_truth'] = None
 
 # Główny panel
@@ -59,7 +60,11 @@ if 'paragraphs' in st.session_state:
     # Uruchom analizę
     if st.button("🔍 Analyze Case", type="primary"):
         with st.spinner("Running multi-agent analysis..."):
-            result = run_pipeline(st.session_state['paragraphs'])
+            try:
+                result = run_pipeline(st.session_state['paragraphs'])
+            except Exception as e:
+                st.error(f"Analysis failed: {e}")
+                st.stop()
         
         # Wyniki
         col1, col2 = st.columns(2)
@@ -94,17 +99,16 @@ if 'paragraphs' in st.session_state:
         
         verdict = result['verdict']
         
-        if verdict['violation']:
-            st.error(f"⚠️ VIOLATION FOUND — Confidence: {verdict['confidence_score']}%")
+        if verdict.get('violation'):
+            st.error(f"⚠️ VIOLATION FOUND — Confidence: {verdict.get('confidence_score', 'N/A')}%")
         else:
-            st.success(f"✅ NO VIOLATION — Confidence: {verdict['confidence_score']}%")
+            st.success(f"✅ NO VIOLATION — Confidence: {verdict.get('confidence_score', 'N/A')}%")
         
         st.write(f"**Violated Articles:** {', '.join(verdict.get('violated_articles', ['None']))}")
-        st.write(f"**Reasoning:** {verdict['reasoning']}")
+        st.write(f"**Reasoning:** {verdict.get('reasoning', 'No reasoning provided')}")
         
         if st.session_state.get('ground_truth'):
             st.divider()
             st.subheader("📊 Ground Truth (from dataset)")
-            articles = ['2','3','5','6','8','9','10','11','14','P1-1']
-            gt = [articles[l] for l in st.session_state['ground_truth']]
+            gt = [ARTICLE_CODES[l] for l in st.session_state['ground_truth']]
             st.write(f"**Actual violated articles:** {', '.join(gt)}")
