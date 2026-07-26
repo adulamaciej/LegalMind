@@ -35,7 +35,7 @@ def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str
 
         response = client.messages.create(
             model="claude-sonnet-5",
-            max_tokens=1000,
+            max_tokens=3000,
             messages=[{"role": "user", "content": prompt}]
         )
         summarized_chunks.append(extract_text(response))
