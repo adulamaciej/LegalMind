@@ -34,6 +34,7 @@ Full analysis in `notebooks/eda.ipynb`.
 
 ## Research question & evaluation
 
+
 **Hypothesis:** Does adversarial debate improve verdict accuracy vs. judge ruling on facts + precedents alone? Tested via two variants: **A** (full pipeline) vs. **B** (no debate).
 
 **Results (pilot, random test cases, budget-constrained):**
@@ -45,6 +46,10 @@ Full analysis in `notebooks/eda.ipynb`.
 **Debugging highlights:**
 - Judge occasionally hallucinated non-existent article codes (e.g. "13") → fixed with explicit allowed-codes list in prompt + code-level filtering
 - Judge showed Article 6 bias (predicted by EDA's class imbalance finding) → initial prompt fix overcorrected into false negatives → rebalanced for accuracy on both sides
+
+**Model Version**
+Haiku 4.5 gave noticeably lower exact-match accuracy than Sonnet 5 across evaluation batches, suggesting model capability — not just prompting — drove verdict quality. This motivated routing  to Sonnet 5 despite higher API cost.
+
 
 ## Setup
 
@@ -64,6 +69,11 @@ python main.py --example 5        # CLI: dataset example
 python main.py --text "..."       # CLI: custom case
 python evaluation.py              # Run evaluation
 ```
+
+
+## Docker
+
+A `Dockerfile` is included for containerized deployment.
 
 
 ## Known limitations / future work
