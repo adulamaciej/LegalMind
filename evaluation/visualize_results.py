@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 
 variants = ['A (with debate)', 'B (no debate)']
-exact_match = [66.7, 66.7]  # z Twoich realnych wyników
+exact_match = [66.7, 66.7]
 partial_match = [100.0, 100.0]
 
 x = range(len(variants))
