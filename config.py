@@ -1,5 +1,6 @@
 import os
-
+from tenacity import retry, stop_after_attempt, wait_exponential
+from anthropic import Anthropic
 
 ARTICLE_CODES = ['2', '3', '5', '6', '8', '9', '10', '11', '14', 'P1-1']  # dataset label index → article code
 
@@ -26,3 +27,16 @@ def extract_text(response):
         if block.type == "text":
             return block.text
     return ""
+
+
+_client = Anthropic()
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+def call_claude(prompt: str, model: str, max_tokens: int) -> str:
+    """Calls Claude with retry/backoff on transient failures. Returns extracted text."""
+    response = _client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return extract_text(response)

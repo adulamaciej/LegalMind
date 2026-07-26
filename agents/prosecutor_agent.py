@@ -1,9 +1,6 @@
 import json
-from anthropic import Anthropic
-from config import extract_text
-from config import MODEL
+from config import call_claude, MODEL
 
-client = Anthropic()
 
 def prosecutor_argue(case_facts: dict, precedents: str) -> str:
     prompt = f"""You are a prosecutor at the European Court of Human Rights.
@@ -23,16 +20,10 @@ Structure your argument as:
 4. Conclusion"""
 
     try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return extract_text(response)
+        return call_claude(prompt, model=MODEL, max_tokens=800)
     except Exception as e:
         print(f"Prosecutor argument failed: {e}")
         return "The prosecution was unable to present arguments due to a technical error."
-
 
 
 
@@ -54,12 +45,7 @@ Show why their arguments are weak or incorrect.
 Strengthen your position that human rights WERE violated."""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return extract_text(response)
+        return call_claude(prompt, model=MODEL, max_tokens=800)
     except Exception as e:
         print(f"Prosecutor rebuttal failed: {e}")
         return "The prosecution was unable to rebut due to a technical error."

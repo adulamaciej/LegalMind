@@ -11,13 +11,13 @@ def main():
     parser.add_argument(
         "--example",
         type=int,
-        help="Uruchom przykład z datasetu (np. --example 1)"
+        help="Run an example from the dataset (e.g. --example 1)"
     )
     
     parser.add_argument(
         "--text",
         type=str,
-        help="Własny tekst sprawy do analizy"
+        help="Custom case text to analyze"
     )
     
     args = parser.parse_args()

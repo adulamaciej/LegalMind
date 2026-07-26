@@ -1,11 +1,8 @@
 import json
-from anthropic import Anthropic
-from config import ARTICLES_MAP, ARTICLE_CODES
-from config import extract_text
-from config import MODEL
+from config import ARTICLES_MAP, ARTICLE_CODES, call_claude, MODEL
 
 
-client = Anthropic()
+
 
 
 # helper function
@@ -17,7 +14,7 @@ def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str
     """
 
     if len(paragraphs) <= 50:
-        return paragraphs  # no summarization needed
+        return paragraphs
 
     # spliting into chunks
     chunks = [paragraphs[i:i+chunk_size] for i in range(0, len(paragraphs), chunk_size)]
@@ -34,12 +31,7 @@ def summarize_long_case(paragraphs: list[str], chunk_size: int = 40) -> list[str
 
                 Provide a concise but complete summary (aim for ~30% of original length):"""
 
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        summarized_chunks.append(extract_text(response))
+        summarized_chunks.append(call_claude(prompt, model=MODEL, max_tokens=3000))
 
     return summarized_chunks
 
@@ -70,13 +62,8 @@ def extract_facts(case_paragraphs: list[str]) -> dict:
 
         Return ONLY the JSON, no other text."""
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    text_response = extract_text(response).strip()
+    text_response = call_claude(prompt, model=MODEL, max_tokens=2000).strip()
+
     if text_response.startswith("```"):
         text_response = text_response.split("```")[1]
         if text_response.startswith("json"):

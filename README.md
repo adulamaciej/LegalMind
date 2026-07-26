@@ -34,7 +34,7 @@ Full analysis in `notebooks/eda.ipynb`.
 
 **Hypothesis:** Does adversarial debate improve verdict accuracy vs. judge ruling on facts + precedents alone? Tested via two variants: **A** (full pipeline) vs. **B** (no debate).
 
-**Results (pilot, ~12 random test cases, budget-constrained):**
+**Results (pilot, ~30 random test cases, budget-constrained):**
 - Debate usually didn't change the verdict — A and B matched in most cases
 - In a few cases, debate corrected over-predicted articles (e.g., dropped a spurious Article 6 flag)
 - Partial match (≥1 correct article) was consistently high (66–100%); exact match varied more, reflecting a tendency to over-predict extra articles
@@ -62,19 +62,6 @@ python main.py --example 5        # CLI: dataset example
 python main.py --text "..."       # CLI: custom case
 python evaluation.py              # Run evaluation
 ```
-
-## Project structure
-
-
-legal_agents/
-├── agents/ # Facts, Precedent, Prosecutor, Defender, Judge
-├── rag/ # ChromaDB indexing and retrieval
-├── pipeline/ # Orchestrator
-├── notebooks/ # EDA
-├── config.py # Shared config (model names, article mappings, helpers)
-├── app.py # Streamlit UI
-├── main.py # CLI
-└── evaluation.py # Evaluation script
 
 
 ## Known limitations / future work

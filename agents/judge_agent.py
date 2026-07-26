@@ -1,11 +1,6 @@
 import json
-from anthropic import Anthropic
-from config import ARTICLES_MAP
-from config import extract_text
-from config import MODEL, ARTICLE_CODES
-from collections import defaultdict
+from config import ARTICLES_MAP, ARTICLE_CODES, call_claude, MODEL
 
-client = Anthropic()
 
 
 def judge_verdict(
@@ -84,15 +79,8 @@ Return ONLY a JSON object with these fields:
 
 Return ONLY the JSON, no other text."""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    text_response = extract_text(response).strip()
+    text_response = call_claude(prompt, model=MODEL, max_tokens=2000).strip()
     if text_response.startswith("```"):
-
         text_response = text_response.split("```")[1]
     if text_response.startswith("json"):
         text_response = text_response[4:]
@@ -103,17 +91,28 @@ Return ONLY the JSON, no other text."""
     except json.JSONDecodeError as e:
         print(f"Failed to parse JSON: {e}\nRaw response: {text_response}")
         raise
-    result['violated_articles'] = [a for a in result.get('violated_articles', []) if a in ARTICLE_CODES]
 
 
     CONFIDENCE_THRESHOLD = 70
-    if result.get('confidence_score', 0) < CONFIDENCE_THRESHOLD:
+    FAIR_TRIAL_KEYWORDS = ["legal representation", "disclosure", "impartial", "adversarial", "equality of arms"]
+
+    original_articles = result.get('violated_articles', [])
+    valid_articles = [a for a in original_articles if a in ARTICLE_CODES]
+    hallucinated = [a for a in original_articles if a not in ARTICLE_CODES]
+    result['violated_articles'] = valid_articles
+    result['filtered_hallucinated_codes'] = hallucinated
+    if hallucinated:
+        print(f"Warning: filtered hallucinated article codes: {hallucinated}")
+
+    result['low_confidence'] = result.get('confidence_score', 0) < CONFIDENCE_THRESHOLD
+    if result['low_confidence']:
         print(f"Warning: low confidence ({result.get('confidence_score')}%) — verdict may be unreliable")
 
-    FAIR_TRIAL_KEYWORDS = ["legal representation", "disclosure", "impartial", "adversarial", "equality of arms"]
-    if '6' in result.get('violated_articles', []):
+    result['unsupported_article_6'] = False
+    if '6' in valid_articles:
         reasoning_lower = result.get('reasoning', '').lower()
         if not any(kw in reasoning_lower for kw in FAIR_TRIAL_KEYWORDS):
+            result['unsupported_article_6'] = True
             print("Warning: Article 6 flagged without specific fair-trial keyword evidence")
 
     return result

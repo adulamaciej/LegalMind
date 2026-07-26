@@ -1,10 +1,6 @@
-from anthropic import Anthropic
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
-from config import extract_text
-from config import MODEL
-
-client = Anthropic()
+from config import call_claude, MODEL
 
 
 class PrecedentAgent:
@@ -55,14 +51,7 @@ How should these precedents influence the current case analysis?
 Provide a concise analysis in 3-4 sentences."""
 
         try:
-            response = client.messages.create(
-            model=MODEL,
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-            return extract_text(response)
+            return call_claude(prompt, model=MODEL, max_tokens=500)
         except Exception as e:
             print(f"Precedent analysis failed: {e}")
             return "Precedent analysis could not be completed due to a technical error."
-
-

@@ -1,9 +1,6 @@
 import json
-from config import extract_text
-from config import MODEL
-from anthropic import Anthropic
+from config import call_claude, MODEL
 
-client = Anthropic()
 
 def defender_argue(case_facts: dict, precedents: str) -> str:
     prompt = f"""You are a defense lawyer at the European Court of Human Rights.
@@ -23,12 +20,7 @@ Structure your argument as:
 4. Conclusion"""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return extract_text(response)
+        return call_claude(prompt, model=MODEL, max_tokens=800)
     except Exception as e:
         print(f"Defender argument failed: {e}")
         return "The defense was unable to present arguments due to a technical error."
@@ -52,12 +44,7 @@ Maintain your position that human rights were NOT violated.
 This is your final statement — make it count."""
 
     try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return extract_text(response)
+        return call_claude(prompt, model=MODEL, max_tokens=800)
     except Exception as e:
         print(f"Defender response failed: {e}")
         return "The defense was unable to respond due to a technical error."

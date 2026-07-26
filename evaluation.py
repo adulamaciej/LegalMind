@@ -103,6 +103,11 @@ def run_evaluation(n_cases: int = 1, seed: int = 123):
             "case_id": i,
             "exact_a": eval_a["exact_match"], "partial_a": eval_a["partial_match"],
             "exact_b": eval_b["exact_match"], "partial_b": eval_b["partial_match"],
+            "flagged": bool(
+                verdict_a.get("low_confidence")
+                or verdict_a.get("unsupported_article_6")
+                or verdict_a.get("filtered_hallucinated_codes")
+            ),
         })
 
         print(f"  A: exact={'✅' if eval_a['exact_match'] else '❌'} partial={'✅' if eval_a['partial_match'] else '❌'} — {eval_a['predicted']}")
@@ -124,6 +129,13 @@ def run_evaluation(n_cases: int = 1, seed: int = 123):
             recall = tp / (tp + fn) if (tp + fn) > 0 else 0
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
             print(f"  Article {article}: precision={precision:.2f}, recall={recall:.2f}, f1={f1:.2f} (tp={tp}, fp={fp}, fn={fn})")
+
+
+    flagged = [r for r in results if r["flagged"]]
+    if flagged:
+        flagged_correct = sum(r["exact_a"] for r in flagged)
+        print(f"\n=== SELF-FLAGGED VERDICTS ===")
+        print(f"{len(flagged)}/{n} verdicts self-flagged as uncertain; {flagged_correct}/{len(flagged)} were exact-correct")
 
     return results
 
