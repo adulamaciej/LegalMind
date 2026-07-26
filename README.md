@@ -34,7 +34,7 @@ Full analysis in `notebooks/eda.ipynb`.
 
 **Hypothesis:** Does adversarial debate improve verdict accuracy vs. judge ruling on facts + precedents alone? Tested via two variants: **A** (full pipeline) vs. **B** (no debate).
 
-**Results (pilot, ~30 random test cases, budget-constrained):**
+**Results (pilot, random test cases, budget-constrained):**
 - Debate usually didn't change the verdict — A and B matched in most cases
 - In a few cases, debate corrected over-predicted articles (e.g., dropped a spurious Article 6 flag)
 - Partial match (≥1 correct article) was consistently high (66–100%); exact match varied more, reflecting a tendency to over-predict extra articles

@@ -1,6 +1,7 @@
 import os
-from tenacity import retry, stop_after_attempt, wait_exponential
-from anthropic import Anthropic
+from anthropic import Anthropic, RateLimitError, APIConnectionError, APITimeoutError, InternalServerError
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 
 ARTICLE_CODES = ['2', '3', '5', '6', '8', '9', '10', '11', '14', 'P1-1']  # dataset label index → article code
 
@@ -31,7 +32,12 @@ def extract_text(response):
 
 _client = Anthropic()
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=2, max=10),
+    retry=retry_if_exception_type((RateLimitError, APIConnectionError, APITimeoutError, InternalServerError))
+)
 def call_claude(prompt: str, model: str, max_tokens: int) -> str:
     """Calls Claude with retry/backoff on transient failures. Returns extracted text."""
     response = _client.messages.create(
@@ -40,3 +46,4 @@ def call_claude(prompt: str, model: str, max_tokens: int) -> str:
         messages=[{"role": "user", "content": prompt}]
     )
     return extract_text(response)
+

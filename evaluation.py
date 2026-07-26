@@ -80,12 +80,17 @@ def run_evaluation(n_cases: int = 1, seed: int = 123):
 
         print(f"\n--- Case {i} (ground truth: {ground_truth}) ---")
 
-        facts = extract_facts(paragraphs)
-        precedents = precedent_agent.find_precedents(paragraphs)
-        precedent_analysis = precedent_agent.analyze_precedents(paragraphs, precedents)
+        try:
+            facts = extract_facts(paragraphs)
+            precedents = precedent_agent.find_precedents(paragraphs)
+            precedent_analysis = precedent_agent.analyze_precedents(paragraphs, precedents)
 
-        verdict_a = run_variant_a(facts, precedent_analysis)
-        verdict_b = run_variant_b(facts, precedent_analysis)
+            verdict_a = run_variant_a(facts, precedent_analysis)
+            verdict_b = run_variant_b(facts, precedent_analysis)
+
+        except Exception as e:
+            print(f"  Case {i} skipped due to error: {e}")
+            continue
 
         eval_a = evaluate_verdict(verdict_a, ground_truth)
         eval_b = evaluate_verdict(verdict_b, ground_truth)
@@ -140,4 +145,4 @@ def run_evaluation(n_cases: int = 1, seed: int = 123):
     return results
 
 if __name__ == "__main__":
-    run_evaluation(n_cases=1, seed=None)
+    run_evaluation(n_cases=15, seed=42)
