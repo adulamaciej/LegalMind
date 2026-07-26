@@ -12,13 +12,11 @@ def get_collection(path: str = "./data/chroma", collection_name: str = "echr_cas
 
 
 # Preparing and adding ECHR cases to ChromaDB
-def index_cases(cases: list[dict], collection) -> None:
-
+def index_cases(cases: list[dict], collection, batch_size: int = 500) -> None:
     """
     Index ECHR cases into ChromaDB.
     Input: list of cases from dataset, ChromaDB collection
     """
-    
     documents = []
     metadatas = []
     ids = []
@@ -29,12 +27,17 @@ def index_cases(cases: list[dict], collection) -> None:
         metadatas.append({"labels": str(case['labels'])})
         ids.append(f"case_{i}")
 
-    collection.add(
-        documents=documents,
-        metadatas=metadatas,
-        ids=ids
-    )
-    print(f"Indexed {len(cases)} cases into ChromaDB.")
+    total = len(documents)
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        collection.add(
+            documents=documents[start:end],
+            metadatas=metadatas[start:end],
+            ids=ids[start:end]
+        )
+        print(f"Indexed {end}/{total} cases...")
+
+    print(f"✅ Finished indexing {total} cases into ChromaDB.")
 
 
 # Indexes training cases into ChromaDB

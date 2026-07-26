@@ -12,3 +12,9 @@ ARTICLES_MAP = {
     "14": "Article 14 (prohibition of discrimination)",
     "P1-1": "P1-1 (protection of property)"
 }
+
+def extract_text(response):
+    for block in response.content:
+        if block.type == "text":
+            return block.text
+    return ""

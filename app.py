@@ -3,11 +3,13 @@ from datasets import load_dataset
 from config import ARTICLE_CODES
 from pipeline.orchestrator import run_pipeline
 
+
 st.set_page_config(
     page_title="LegalMind — ECHR Analysis",
     page_icon="⚖️",
     layout="wide"
 )
+
 
 st.title("⚖️ LegalMind")
 st.subheader("Multi-Agent ECHR Case Analysis System")

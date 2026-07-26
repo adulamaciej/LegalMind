@@ -1,5 +1,6 @@
 import json
 from anthropic import Anthropic
+from config import extract_text
 
 client = Anthropic()
 
@@ -26,7 +27,7 @@ Structure your argument as:
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text
+        return extract_text(response)
     except Exception as e:
         print(f"Prosecutor argument failed: {e}")
         return "The prosecution was unable to present arguments due to a technical error."
@@ -57,7 +58,7 @@ Strengthen your position that human rights WERE violated."""
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text
+        return extract_text(response)
     except Exception as e:
         print(f"Prosecutor rebuttal failed: {e}")
         return "The prosecution was unable to rebut due to a technical error."

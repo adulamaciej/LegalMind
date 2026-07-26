@@ -1,6 +1,7 @@
 from anthropic import Anthropic
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
+from config import extract_text
 
 client = Anthropic()
 
@@ -58,7 +59,7 @@ Provide a concise analysis in 3-4 sentences."""
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}]
         )
-            return response.content[0].text
+            return extract_text(response)
         except Exception as e:
             print(f"Precedent analysis failed: {e}")
             return "Precedent analysis could not be completed due to a technical error."

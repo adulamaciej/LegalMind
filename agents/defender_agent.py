@@ -1,4 +1,5 @@
 import json
+from config import extract_text
 from anthropic import Anthropic
 
 client = Anthropic()
@@ -26,7 +27,7 @@ Structure your argument as:
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text
+        return extract_text(response)
     except Exception as e:
         print(f"Defender argument failed: {e}")
         return "The defense was unable to present arguments due to a technical error."
@@ -55,7 +56,7 @@ This is your final statement — make it count."""
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}]
         )
-        return response.content[0].text
+        return extract_text(response)
     except Exception as e:
         print(f"Defender response failed: {e}")
         return "The defense was unable to respond due to a technical error."

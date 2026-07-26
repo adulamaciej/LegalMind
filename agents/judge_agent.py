@@ -1,6 +1,7 @@
 import json
 from anthropic import Anthropic
 from config import ARTICLES_MAP
+from config import extract_text
 
 client = Anthropic()
 
@@ -58,7 +59,7 @@ Return ONLY the JSON, no other text."""
         messages=[{"role": "user", "content": prompt}]
     )
 
-    text_response = response.content[0].text.strip()
+    text_response = extract_text(response).strip()
     if text_response.startswith("```"):
 
         text_response = text_response.split("```")[1]
