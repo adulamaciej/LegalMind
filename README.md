@@ -70,7 +70,7 @@ python rag/indexer.py   # one-time: index all 9,000 training cases into ChromaDB
 streamlit run app.py              # Web UI
 python main.py --example 5        # CLI: dataset example
 python main.py --text "..."       # CLI: custom case
-python evaluation.py              # Run evaluation
+python evaluation/evaluation.py   # Run evaluation
 pytest tests/ -v                  # Run unit tests
 ```
 
