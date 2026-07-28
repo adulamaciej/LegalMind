@@ -31,7 +31,7 @@ def judge_verdict(
 {defender_response}
 """
     
-    # The model hallucinated and used article 14 which does not exist in this dataset so explicitly listing allowed articles here
+    # The model hallucinated article codes like "13", which do not exist in this dataset, so explicitly listing allowed articles here
     allowed_articles = ", ".join(f"'{code}'" for code in ARTICLE_CODES)
     prompt = f"""You are a judge at the European Court of Human Rights.
 You have read the full transcript of the debate between prosecutor and defender.
@@ -103,6 +103,10 @@ Return ONLY the JSON, no other text."""
     result['filtered_hallucinated_codes'] = hallucinated
     if hallucinated:
         print(f"Warning: filtered hallucinated article codes: {hallucinated}")
+
+    if result.get('violation') and not valid_articles:
+        print("Warning: verdict claimed a violation but named no valid article after filtering — downgrading to no violation")
+        result['violation'] = False
 
     result['low_confidence'] = result.get('confidence_score', 0) < CONFIDENCE_THRESHOLD
     if result['low_confidence']:

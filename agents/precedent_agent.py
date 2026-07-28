@@ -1,6 +1,17 @@
+import ast
+
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
-from config import call_claude, MODEL
+from config import call_claude, MODEL, ARTICLE_CODES
+
+
+def _labels_to_articles(labels_str: str) -> list[str]:
+    """Convert a stored '[0, 5]' label-index string back into article codes."""
+    try:
+        indices = ast.literal_eval(labels_str)
+        return [ARTICLE_CODES[i] for i in indices]
+    except (ValueError, SyntaxError, IndexError):
+        return []
 
 
 class PrecedentAgent:
@@ -32,7 +43,8 @@ class PrecedentAgent:
         """
         facts_text = " ".join(case_facts[:5])
         precedents_text = "\n".join([
-            f"Precedent {i+1}: {p['text'][:200]}..."
+            f"Precedent {i+1} (violated articles: {_labels_to_articles(p['labels'])}, "
+            f"similarity: {p['similarity']:.3f}): {p['text'][:200]}..."
             for i, p in enumerate(precedents)
         ])
 

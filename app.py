@@ -4,6 +4,12 @@ from config import ARTICLE_CODES
 from pipeline.orchestrator import run_pipeline
 import os
 
+st.set_page_config(
+    page_title="LegalMind — ECHR Analysis",
+    page_icon="⚖️",
+    layout="wide"
+)
+
 if not os.path.exists("./data/chroma"):
     st.info("First-time setup: indexing precedent database, this may take a few minutes...")
     from datasets import load_dataset
@@ -12,13 +18,6 @@ if not os.path.exists("./data/chroma"):
     collection = get_collection()
     index_cases(list(ds['train']), collection)
     st.success("Setup complete!")
-
-st.set_page_config(
-    page_title="LegalMind — ECHR Analysis",
-    page_icon="⚖️",
-    layout="wide"
-)
-
 
 st.title("⚖️ LegalMind")
 st.subheader("Multi-Agent ECHR Case Analysis System")
@@ -115,10 +114,11 @@ if 'paragraphs' in st.session_state:
         else:
             st.success(f"✅ NO VIOLATION — Confidence: {verdict.get('confidence_score', 'N/A')}%")
         
-        st.write(f"**Violated Articles:** {', '.join(verdict.get('violated_articles', ['None']))}")
+        violated_articles = verdict.get('violated_articles') or ['None']
+        st.write(f"**Violated Articles:** {', '.join(violated_articles)}")
         st.write(f"**Reasoning:** {verdict.get('reasoning', 'No reasoning provided')}")
-        
-        if st.session_state.get('ground_truth'):
+
+        if st.session_state.get('ground_truth') is not None:
             st.divider()
             st.subheader("📊 Ground Truth (from dataset)")
             gt = [ARTICLE_CODES[l] for l in st.session_state['ground_truth']]

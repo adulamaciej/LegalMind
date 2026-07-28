@@ -7,7 +7,10 @@ def get_collection(path: str = "./data/chroma", collection_name: str = "echr_cas
     """Initialize and return ChromaDB collection."""
 
     client = chromadb.PersistentClient(path=path)
-    collection = client.get_or_create_collection(name=collection_name)
+    collection = client.get_or_create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"}
+    )
     return collection
 
 

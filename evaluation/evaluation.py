@@ -119,6 +119,10 @@ def run_evaluation(n_cases: int = 1, seed: int = 123):
         print(f"  B: exact={'✅' if eval_b['exact_match'] else '❌'} partial={'✅' if eval_b['partial_match'] else '❌'} — {eval_b['predicted']}")
 
     n = len(results)
+    if n == 0:
+        print("\nNo cases completed successfully — nothing to summarize.")
+        return results
+
     print("\n=== BATCH SUMMARY ===")
     for variant in ['a', 'b']:
         exact_acc = sum(r[f'exact_{variant}'] for r in results) / n
