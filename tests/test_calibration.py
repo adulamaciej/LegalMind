@@ -7,7 +7,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from evaluation.calibration import (
     TARGETS,
+    _midranks,
     compute_calibration,
+    compute_discrimination,
     normalize_confidence,
 )
 
@@ -283,6 +285,158 @@ def test_distinct_confidence_values_reported_as_sorted_percentages():
     rows = correct_rows(1, 90) + correct_rows(1, 70, start=5) + correct_rows(1, 90, start=9)
     result = compute_calibration(rows, target="violation")
     assert result["distinct_confidence_values"] == [70.0, 90.0]
+
+
+# --- _midranks ---
+
+def test_midranks_without_ties():
+    assert _midranks([80.0, 90.0, 85.0]) == [1.0, 3.0, 2.0]
+
+
+def test_midranks_shares_average_rank_across_ties():
+    # Two values tied for ranks 1 and 2 both get 1.5
+    assert _midranks([85.0, 85.0]) == [1.5, 1.5]
+    # Three-way tie for ranks 2, 3, 4 all get 3.0
+    assert _midranks([70.0, 85.0, 85.0, 85.0]) == [1.0, 3.0, 3.0, 3.0]
+
+
+# --- compute_discrimination: shape guarantees ---
+
+DISCRIMINATION_KEYS = {
+    "variant", "target", "n_scored", "n_excluded", "n_correct", "n_incorrect",
+    "mean_confidence_when_correct", "mean_confidence_when_incorrect",
+    "separation", "auroc", "undefined_reason",
+}
+
+
+def test_discrimination_empty_results_returns_full_schema():
+    result = compute_discrimination([], target="violation")
+    assert set(result) == DISCRIMINATION_KEYS
+    assert result["separation"] is None
+    assert result["auroc"] is None
+    assert result["undefined_reason"] == "no scoreable cases"
+
+
+def test_discrimination_undefined_when_every_case_correct():
+    """Realistic at n=15 for the `exact` target, and must not raise."""
+    result = compute_discrimination(correct_rows(5, 85), target="violation")
+    assert set(result) == DISCRIMINATION_KEYS
+    assert result["n_incorrect"] == 0
+    assert result["separation"] is None
+    assert result["auroc"] is None
+    assert result["undefined_reason"] == "every scored case was correct"
+    # The one group that does exist is still reported
+    assert result["mean_confidence_when_correct"] == pytest.approx(0.85)
+    assert result["mean_confidence_when_incorrect"] is None
+
+
+def test_discrimination_undefined_when_every_case_incorrect():
+    result = compute_discrimination(incorrect_rows(4, 60), target="violation")
+    assert result["n_correct"] == 0
+    assert result["separation"] is None
+    assert result["undefined_reason"] == "every scored case was incorrect"
+    assert result["mean_confidence_when_incorrect"] == pytest.approx(0.6)
+
+
+def test_discrimination_counts_exclusions():
+    rows = correct_rows(3, 90) + incorrect_rows(2, 70) + [make_row(50, "high")]
+    result = compute_discrimination(rows, target="violation")
+    assert result["n_scored"] == 5
+    assert result["n_excluded"] == 1
+
+
+def test_discrimination_rejects_unknown_target():
+    with pytest.raises(ValueError, match="unknown target"):
+        compute_discrimination(correct_rows(1, 85), target="nonsense")
+
+
+def test_discrimination_rejects_old_results_file():
+    legacy_row = {"case_id": 1, "exact_a": True, "flagged": False}
+    with pytest.raises(ValueError, match="predates calibration support"):
+        compute_discrimination([legacy_row], target="violation")
+
+
+# --- compute_discrimination: separation ---
+
+def test_separation_positive_when_confidence_tracks_correctness():
+    rows = correct_rows(4, 90) + incorrect_rows(4, 60)
+    result = compute_discrimination(rows, target="violation")
+    assert result["separation"] == pytest.approx(0.3)
+    assert result["auroc"] == pytest.approx(1.0)
+
+
+def test_separation_negative_when_confidence_is_anticorrelated():
+    """Confident exactly when wrong — triage built on this would be backwards."""
+    rows = correct_rows(4, 60) + incorrect_rows(4, 90)
+    result = compute_discrimination(rows, target="violation")
+    assert result["separation"] == pytest.approx(-0.3)
+    assert result["auroc"] == pytest.approx(0.0)
+
+
+def test_separation_zero_when_confidence_is_constant():
+    rows = correct_rows(5, 85) + incorrect_rows(5, 85)
+    result = compute_discrimination(rows, target="violation")
+    assert result["separation"] == pytest.approx(0.0)
+    assert result["auroc"] == pytest.approx(0.5)
+
+
+# --- compute_discrimination: AUROC against hand-computed values ---
+
+def test_auroc_is_half_when_all_confidences_tie():
+    rows = correct_rows(1, 85) + incorrect_rows(1, 85)
+    assert compute_discrimination(rows, target="violation")["auroc"] == pytest.approx(0.5)
+
+
+def test_auroc_with_partial_ties():
+    """
+    Correct = [90, 80], incorrect = [85]. Pairwise: 90 beats 85, 80 loses to 85
+    — one win out of two, so AUROC is 0.5. Verifies the Mann-Whitney formula
+    against a value that can be checked by hand.
+    """
+    rows = [
+        make_row(0, 90, violation=True, truth_violation=True),
+        make_row(1, 80, violation=True, truth_violation=True),
+        make_row(2, 85, violation=True, truth_violation=False),
+    ]
+    assert compute_discrimination(rows, target="violation")["auroc"] == pytest.approx(0.5)
+
+
+def test_auroc_gives_half_credit_for_a_tied_pair():
+    """
+    Correct = [90, 85], incorrect = [85]. One clear win plus one tie scored as
+    half: (1 + 0.5) / 2 = 0.75.
+    """
+    rows = [
+        make_row(0, 90, violation=True, truth_violation=True),
+        make_row(1, 85, violation=True, truth_violation=True),
+        make_row(2, 85, violation=True, truth_violation=False),
+    ]
+    assert compute_discrimination(rows, target="violation")["auroc"] == pytest.approx(0.75)
+
+
+def test_auroc_is_base_rate_independent():
+    """
+    Why auroc, not ece, is used to compare targets: skewing the class balance
+    while preserving the ranking must not move it.
+    """
+    balanced = correct_rows(3, 90) + incorrect_rows(3, 60)
+    skewed = correct_rows(20, 90) + incorrect_rows(2, 60)
+    auroc_balanced = compute_discrimination(balanced, target="violation")["auroc"]
+    auroc_skewed = compute_discrimination(skewed, target="violation")["auroc"]
+    assert auroc_balanced == pytest.approx(auroc_skewed)
+
+
+def test_discrimination_differs_by_target():
+    """Same verdicts, different targets — confidence can separate on one and not
+    another, which is the whole reason for scoring three."""
+    rows = [
+        make_row(0, 95, predicted=["6"], truth=["6"]),
+        make_row(1, 60, predicted=["6"], truth=["6", "8"]),
+    ]
+    # violation: both correct -> undefined
+    assert compute_discrimination(rows, target="violation")["separation"] is None
+    # exact: case 0 correct at 95, case 1 wrong at 60 -> clean separation
+    assert compute_discrimination(rows, target="exact")["separation"] == pytest.approx(0.35)
 
 
 def test_variant_b_scored_independently():
