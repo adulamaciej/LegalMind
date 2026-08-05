@@ -8,10 +8,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from evaluation.calibration import (
     TARGETS,
     _midranks,
+    compare_variants_paired,
     compute_calibration,
     compute_discrimination,
     error_detection_rate,
     normalize_confidence,
+    sign_test,
 )
 
 
@@ -623,6 +625,225 @@ def test_detection_rejects_unknown_target():
 def test_detection_rejects_old_results_file():
     with pytest.raises(ValueError, match="predates calibration support"):
         error_detection_rate([{"case_id": 1, "exact_a": True}], target="violation")
+
+
+# --- sign_test, against hand-computed exact values ---
+
+def test_sign_test_symmetric_split_is_not_significant():
+    # extreme = 5, tail = C(10,5..10) = 638, p = 2 * 638 / 1024 -> capped at 1.0
+    assert sign_test(5, 10) == pytest.approx(1.0)
+
+
+def test_sign_test_all_wins():
+    # extreme = 5, tail = C(5,5) = 1, p = 2 * 1 / 32
+    assert sign_test(5, 5) == pytest.approx(0.0625)
+
+
+def test_sign_test_all_losses_is_symmetric():
+    assert sign_test(0, 5) == pytest.approx(sign_test(5, 5))
+
+
+def test_sign_test_nine_of_fourteen():
+    # tail = C(14,9..14) = 2002+1001+364+91+14+1 = 3473; p = 2 * 3473 / 16384
+    assert sign_test(9, 14) == pytest.approx(2 * 3473 / 16384)
+    assert sign_test(9, 14) == pytest.approx(0.4239502, abs=1e-6)
+
+
+def test_sign_test_single_case_can_never_be_significant():
+    assert sign_test(1, 1) == pytest.approx(1.0)
+    assert sign_test(0, 1) == pytest.approx(1.0)
+
+
+def test_sign_test_undefined_without_decisive_cases():
+    assert sign_test(0, 0) is None
+
+
+def test_sign_test_rejects_impossible_win_count():
+    with pytest.raises(ValueError, match="n_wins"):
+        sign_test(6, 5)
+    with pytest.raises(ValueError, match="n_wins"):
+        sign_test(-1, 5)
+
+
+def test_sign_test_never_exceeds_one():
+    for n in range(1, 21):
+        for wins in range(n + 1):
+            assert 0.0 < sign_test(wins, n) <= 1.0
+
+
+# --- compare_variants_paired ---
+
+PAIRED_KEYS = {
+    "target", "n_paired", "n_scored_a", "n_scored_b", "brier_a", "brier_b",
+    "mean_delta", "sd_delta", "min_delta", "max_delta", "favors_a", "favors_b",
+    "ties", "n_decisive", "sign_test_p", "undefined_reason", "per_case",
+}
+
+
+def ab_row(case_id, confidence_a, correct_a, confidence_b, correct_b):
+    """
+    One case scored in both variants.
+
+    Correctness is expressed for the `violation` target only: ground truth is
+    always "a violation occurred", and a variant is made wrong by having it rule
+    the opposite. Tests that need a per-target difference build their row inline.
+    """
+    return {
+        "case_id": case_id,
+        "confidence_a": confidence_a,
+        "violation_a": bool(correct_a),
+        "predicted_a": ["6"],
+        "confidence_b": confidence_b,
+        "violation_b": bool(correct_b),
+        "predicted_b": ["6"],
+        "truth_violation": True,
+        "truth": ["6"],
+    }
+
+
+def test_paired_empty_results_returns_full_schema():
+    result = compare_variants_paired([], target="violation")
+    assert set(result) == PAIRED_KEYS
+    assert result["n_paired"] == 0
+    assert result["sign_test_p"] is None
+    assert result["undefined_reason"] == "no cases scoreable in both variants"
+
+
+def test_paired_mean_delta_equals_brier_difference():
+    """The pairing buys the distribution, not the point estimate — this identity
+    is why mean_delta must not be presented as new information."""
+    rows = [
+        ab_row(0, 90, True, 60, True),
+        ab_row(1, 80, False, 95, False),
+        ab_row(2, 70, True, 70, False),
+    ]
+    result = compare_variants_paired(rows, target="violation")
+    assert result["mean_delta"] == pytest.approx(result["brier_a"] - result["brier_b"])
+
+
+def test_paired_favours_the_variant_with_lower_brier():
+    # A confident and right, B unconfident and right -> A has lower Brier
+    rows = [ab_row(0, 95, True, 55, True)]
+    result = compare_variants_paired(rows, target="violation")
+    assert result["favors_a"] == 1
+    assert result["favors_b"] == 0
+    assert result["mean_delta"] < 0
+
+
+def test_paired_counts_split_across_wins_losses_and_ties():
+    rows = [
+        ab_row(0, 95, True, 55, True),    # A better
+        ab_row(1, 95, True, 55, True),    # A better
+        ab_row(2, 55, True, 95, True),    # B better
+        ab_row(3, 80, True, 80, True),    # tie
+        ab_row(4, 70, False, 70, False),  # tie
+    ]
+    result = compare_variants_paired(rows, target="violation")
+    assert (result["favors_a"], result["favors_b"], result["ties"]) == (2, 1, 2)
+    assert result["n_paired"] == 5
+
+
+def test_paired_ties_excluded_from_sign_test_denominator():
+    rows = [
+        ab_row(0, 95, True, 55, True),    # A better
+        ab_row(1, 95, True, 55, True),    # A better
+        ab_row(2, 80, True, 80, True),    # tie
+        ab_row(3, 80, True, 80, True),    # tie
+        ab_row(4, 80, True, 80, True),    # tie
+    ]
+    result = compare_variants_paired(rows, target="violation")
+    assert result["n_decisive"] == 2
+    assert result["sign_test_p"] == pytest.approx(sign_test(2, 2))
+
+
+def test_paired_sign_test_undefined_when_every_case_ties():
+    """Brier comparison still holds; only the test is undefined."""
+    rows = [ab_row(i, 80, True, 80, True) for i in range(3)]
+    result = compare_variants_paired(rows, target="violation")
+    assert result["n_decisive"] == 0
+    assert result["sign_test_p"] is None
+    assert result["mean_delta"] == pytest.approx(0.0)
+    assert result["undefined_reason"] is None
+
+
+def test_paired_uses_only_cases_scoreable_in_both_variants():
+    """A case usable in A but not B must drop out of the pairing, and the
+    per-variant counts must expose the discrepancy."""
+    rows = [
+        ab_row(0, 90, True, 60, True),
+        ab_row(1, 90, True, 60, True),
+    ]
+    rows[1]["confidence_b"] = "unusable"
+    result = compare_variants_paired(rows, target="violation")
+    assert result["n_paired"] == 1
+    assert result["n_scored_a"] == 2
+    assert result["n_scored_b"] == 1
+
+
+def test_paired_brier_computed_on_the_paired_subset():
+    """Numbers in one report section must reconcile, so brier_a here is over the
+    paired cases only — not over everything variant A could score."""
+    rows = [
+        ab_row(0, 100, True, 100, True),   # brier_a = 0
+        ab_row(1, 0, False, 0, False),     # brier_a = 0, but dropped below
+    ]
+    rows[1]["confidence_b"] = None
+    result = compare_variants_paired(rows, target="violation")
+    assert result["n_paired"] == 1
+    assert result["brier_a"] == pytest.approx(0.0)
+
+
+def test_paired_spread_reported():
+    rows = [
+        ab_row(0, 95, True, 55, True),
+        ab_row(1, 55, True, 95, True),
+    ]
+    result = compare_variants_paired(rows, target="violation")
+    assert result["min_delta"] < 0 < result["max_delta"]
+    assert result["sd_delta"] > 0
+
+
+def test_paired_sd_undefined_for_a_single_case():
+    result = compare_variants_paired([ab_row(0, 90, True, 60, True)], target="violation")
+    assert result["n_paired"] == 1
+    assert result["sd_delta"] is None
+
+
+def test_paired_per_case_rows_carry_case_ids():
+    rows = [ab_row(7, 90, True, 60, True), ab_row(3, 80, False, 80, True)]
+    result = compare_variants_paired(rows, target="violation")
+    assert [case["case_id"] for case in result["per_case"]] == [7, 3]
+
+
+def test_paired_respects_the_target():
+    """Variant A right on `violation` but wrong on `exact` must flip the winner."""
+    row = {
+        "case_id": 0,
+        "confidence_a": 95, "violation_a": True, "predicted_a": ["6"],
+        "confidence_b": 95, "violation_b": True, "predicted_b": ["6", "8"],
+        "truth_violation": True, "truth": ["6", "8"],
+    }
+    on_violation = compare_variants_paired([row], target="violation")
+    on_exact = compare_variants_paired([row], target="exact")
+    assert on_violation["ties"] == 1          # both correct, same confidence
+    assert on_exact["favors_b"] == 1          # only B named the right set
+
+
+def test_paired_rejects_unknown_target():
+    with pytest.raises(ValueError, match="unknown target"):
+        compare_variants_paired([ab_row(0, 90, True, 60, True)], target="nonsense")
+
+
+def test_paired_rejects_old_results_file():
+    with pytest.raises(ValueError, match="predates calibration support"):
+        compare_variants_paired([{"case_id": 1, "exact_a": True}], target="violation")
+
+
+def test_paired_requires_variant_b_fields():
+    row = ab_row(0, 90, True, 60, True)
+    del row["confidence_b"]
+    with pytest.raises(ValueError, match="confidence_b"):
+        compare_variants_paired([row], target="violation")
 
 
 def test_variant_b_scored_independently():

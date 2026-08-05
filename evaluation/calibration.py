@@ -65,12 +65,18 @@ At small sample sizes prefer `separation` over `auroc`: with only a handful of
 incorrect verdicts, auroc moves in large steps and reads as more precise than it
 is. Both are None when every case fell on the same side.
 
+Comparing variant A against B is only paired for Brier, because that is the one
+metric with a per-case value. ece, separation, auroc and lift describe a whole
+set, so their A/B comparison is two independent scalars with none of the power
+that pairing provides — a difference between them is much weaker evidence and
+must be labelled as unpaired wherever it is presented.
+
 `no_discrimination` (confidence is constant) does not invalidate brier or ece;
 it means ECE collapses to |overconfidence| and carries no extra information,
 and that confidence is useless for telling easy cases from hard ones.
 """
 
-from math import ceil
+from math import ceil, comb, sqrt
 
 TARGETS = ("violation", "exact", "any_correct")
 
@@ -142,22 +148,51 @@ def _bin_index(confidence: float, n_bins: int) -> int:
     return min(int(confidence * n_bins), n_bins - 1)
 
 
-def _score_pairs(results: list[dict], variant: str, target: str):
+def _scored_cases(results: list[dict], variant: str, target: str):
     """
-    Extract (confidence in [0, 1], outcome) pairs plus an exclusion count.
+    Extract (confidence in [0, 1], case_id, outcome) triples and an exclusion count.
 
     Shared by every metric so they cannot drift apart on which cases they
     consider scoreable.
     """
-    pairs = []
+    scored = []
     n_excluded = 0
     for row in results:
         confidence = normalize_confidence(row.get(f"confidence_{variant}"))
         if confidence is None:
             n_excluded += 1
             continue
-        pairs.append((confidence / 100, _outcome(row, variant, target)))
-    return pairs, n_excluded
+        scored.append(
+            (confidence / 100, row.get("case_id"), _outcome(row, variant, target))
+        )
+    return scored, n_excluded
+
+
+def _paired_cases(results: list[dict], target: str):
+    """
+    Cases scoreable in BOTH variants, as
+    (case_id, confidence_a, outcome_a, confidence_b, outcome_b).
+
+    A separate extraction from _scored_cases because pairing needs both
+    variants present on the same row, but it reuses the same normalize and
+    outcome primitives so the three call sites agree on what counts.
+    """
+    paired = []
+    for row in results:
+        confidence_a = normalize_confidence(row.get("confidence_a"))
+        confidence_b = normalize_confidence(row.get("confidence_b"))
+        if confidence_a is None or confidence_b is None:
+            continue
+        paired.append(
+            (
+                row.get("case_id"),
+                confidence_a / 100,
+                _outcome(row, "a", target),
+                confidence_b / 100,
+                _outcome(row, "b", target),
+            )
+        )
+    return paired
 
 
 def _midranks(values: list[float]) -> list[float]:
@@ -183,7 +218,7 @@ def _midranks(values: list[float]) -> list[float]:
     return ranks
 
 
-def _auroc(pairs: list[tuple[float, bool]]) -> float | None:
+def _auroc(scored: list[tuple[float, object, bool]]) -> float | None:
     """
     Probability that a random correct case outscores a random incorrect one.
 
@@ -192,8 +227,8 @@ def _auroc(pairs: list[tuple[float, bool]]) -> float | None:
     """
     correct_ranks = []
     n_correct = n_incorrect = 0
-    ranks = _midranks([confidence for confidence, _ in pairs])
-    for rank, (_, outcome) in zip(ranks, pairs):
+    ranks = _midranks([confidence for confidence, _, _ in scored])
+    for rank, (_, _, outcome) in zip(ranks, scored):
         if outcome:
             correct_ranks.append(rank)
             n_correct += 1
@@ -225,8 +260,8 @@ def compute_calibration(
 
     _check_schema(results, variant, target)
 
-    pairs, n_excluded = _score_pairs(results, variant, target)
-    n = len(pairs)
+    scored, n_excluded = _scored_cases(results, variant, target)
+    n = len(scored)
     # Stable, sorted bin list — emitted even when empty, so two runs diff cleanly.
     bins = [
         {
@@ -256,18 +291,18 @@ def compute_calibration(
             "bins": bins,
         }
 
-    confidences = [c for c, _ in pairs]
-    outcomes = [o for _, o in pairs]
+    confidences = [c for c, _, _ in scored]
+    outcomes = [o for _, _, o in scored]
 
     mean_confidence = sum(confidences) / n
     accuracy = sum(outcomes) / n
-    brier = sum((c - o) ** 2 for c, o in pairs) / n
+    brier = sum((c - o) ** 2 for c, _, o in scored) / n
 
     # Accumulate per bin, then derive ECE from bin means (not bin midpoints —
     # midpoints bias the estimate when a bin's values are skewed, which they
     # are here because models favour round numbers like 85 and 90).
     totals = [{"n": 0, "conf_sum": 0.0, "correct": 0} for _ in range(n_bins)]
-    for confidence, outcome in pairs:
+    for confidence, _, outcome in scored:
         acc = totals[_bin_index(confidence, n_bins)]
         acc["n"] += 1
         acc["conf_sum"] += confidence
@@ -301,6 +336,131 @@ def compute_calibration(
     }
 
 
+def sign_test(n_wins: int, n_decisive: int) -> float | None:
+    """
+    Exact two-sided p-value for "A wins as often as B".
+
+    Under the null hypothesis that the debate makes no difference, each case is
+    a coin flip, so the win count is Binomial(n_decisive, 0.5). Exact rather
+    than bootstrapped: no seed to record and the output is reproducible to the
+    byte.
+
+    Deliberately ignores the size of each win — one large margin counts the same
+    as one narrow one. Read it alongside mean_delta, which carries magnitude.
+
+    Returns None when no case was decisive, since there is nothing to test.
+    """
+    if n_decisive <= 0:
+        return None
+    if not 0 <= n_wins <= n_decisive:
+        raise ValueError(
+            f"n_wins must be in [0, {n_decisive}], got {n_wins}"
+        )
+    extreme = max(n_wins, n_decisive - n_wins)
+    tail = sum(comb(n_decisive, i) for i in range(extreme, n_decisive + 1))
+    return min(1.0, 2 * tail / 2 ** n_decisive)
+
+
+def compare_variants_paired(results: list[dict], target: str = "violation") -> dict:
+    """
+    Per-case Brier comparison of variant A (with debate) against B (without).
+
+    Both variants run on the same cases from the same extracted facts and
+    precedents, so the comparison is paired — which at n=15 is the only source
+    of statistical power available.
+
+    Only Brier can be paired. separation, auroc, ece and lift are properties of
+    a whole set with no per-case value, so their A/B comparison is necessarily
+    unpaired and belongs in the report rather than here.
+
+    Note that mean_delta equals brier_a - brier_b exactly; the pairing buys the
+    distribution (win counts, spread, sign test), not a new point estimate.
+
+    Lower Brier is better, so a negative delta favours A.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
+
+    _check_schema(results, "a", target)
+    _check_schema(results, "b", target)
+
+    # Reported so the reader can see why n_paired may be smaller than either.
+    scored_a, _ = _scored_cases(results, "a", target)
+    scored_b, _ = _scored_cases(results, "b", target)
+
+    paired = _paired_cases(results, target)
+    n_paired = len(paired)
+
+    per_case = []
+    for case_id, confidence_a, outcome_a, confidence_b, outcome_b in paired:
+        brier_a = (confidence_a - outcome_a) ** 2
+        brier_b = (confidence_b - outcome_b) ** 2
+        per_case.append(
+            {
+                "case_id": case_id,
+                "brier_a": brier_a,
+                "brier_b": brier_b,
+                "delta": brier_a - brier_b,
+            }
+        )
+
+    if n_paired == 0:
+        return {
+            "target": target,
+            "n_paired": 0,
+            "n_scored_a": len(scored_a),
+            "n_scored_b": len(scored_b),
+            "brier_a": None,
+            "brier_b": None,
+            "mean_delta": None,
+            "sd_delta": None,
+            "min_delta": None,
+            "max_delta": None,
+            "favors_a": 0,
+            "favors_b": 0,
+            "ties": 0,
+            "n_decisive": 0,
+            "sign_test_p": None,
+            "undefined_reason": "no cases scoreable in both variants",
+            "per_case": [],
+        }
+
+    deltas = [case["delta"] for case in per_case]
+    mean_delta = sum(deltas) / n_paired
+    if n_paired > 1:
+        variance = sum((d - mean_delta) ** 2 for d in deltas) / (n_paired - 1)
+        sd_delta = sqrt(variance)
+    else:
+        sd_delta = None
+
+    favors_a = sum(1 for d in deltas if d < 0)
+    favors_b = sum(1 for d in deltas if d > 0)
+    ties = sum(1 for d in deltas if d == 0)
+    n_decisive = favors_a + favors_b
+
+    return {
+        "target": target,
+        "n_paired": n_paired,
+        "n_scored_a": len(scored_a),
+        "n_scored_b": len(scored_b),
+        # Computed on the paired subset so every number here reconciles.
+        "brier_a": sum(case["brier_a"] for case in per_case) / n_paired,
+        "brier_b": sum(case["brier_b"] for case in per_case) / n_paired,
+        "mean_delta": mean_delta,
+        "sd_delta": sd_delta,
+        "min_delta": min(deltas),
+        "max_delta": max(deltas),
+        "favors_a": favors_a,
+        "favors_b": favors_b,
+        "ties": ties,
+        "n_decisive": n_decisive,
+        # None when every paired case tied; the Brier comparison is still valid.
+        "sign_test_p": sign_test(favors_a, n_decisive),
+        "undefined_reason": None,
+        "per_case": per_case,
+    }
+
+
 def error_detection_rate(
     results: list[dict],
     variant: str = "a",
@@ -331,21 +491,12 @@ def error_detection_rate(
 
     _check_schema(results, variant, target)
 
-    # Sort by confidence, then case_id, so a tie group is ordered the same way
-    # on every run rather than depending on input order.
-    scored = []
-    n_excluded = 0
-    for row in results:
-        confidence = normalize_confidence(row.get(f"confidence_{variant}"))
-        if confidence is None:
-            n_excluded += 1
-            continue
-        scored.append(
-            (confidence / 100, row.get("case_id"), _outcome(row, variant, target))
-        )
-    # str() on the tiebreaker so a row without a case_id sorts deterministically
-    # instead of raising on a None-vs-int comparison. Only determinism matters
-    # here, not the ordering being meaningful.
+    scored, n_excluded = _scored_cases(results, variant, target)
+    # Sort by confidence, then case_id, so a tie group is ordered the same way on
+    # every run rather than depending on input order. str() on the tiebreaker so
+    # a row without a case_id sorts deterministically instead of raising on a
+    # None-vs-int comparison; only determinism matters here, not the ordering
+    # being meaningful.
     scored.sort(key=lambda item: (item[0], str(item[1])))
 
     n = len(scored)
@@ -411,13 +562,13 @@ def compute_discrimination(
 
     _check_schema(results, variant, target)
 
-    pairs, n_excluded = _score_pairs(results, variant, target)
-    correct = [confidence for confidence, outcome in pairs if outcome]
-    incorrect = [confidence for confidence, outcome in pairs if not outcome]
+    scored, n_excluded = _scored_cases(results, variant, target)
+    correct = [confidence for confidence, _, outcome in scored if outcome]
+    incorrect = [confidence for confidence, _, outcome in scored if not outcome]
     n_correct, n_incorrect = len(correct), len(incorrect)
 
     if n_correct == 0 or n_incorrect == 0:
-        if not pairs:
+        if not scored:
             reason = "no scoreable cases"
         elif n_incorrect == 0:
             reason = "every scored case was correct"
@@ -426,7 +577,7 @@ def compute_discrimination(
         return {
             "variant": variant,
             "target": target,
-            "n_scored": len(pairs),
+            "n_scored": len(scored),
             "n_excluded": n_excluded,
             "n_correct": n_correct,
             "n_incorrect": n_incorrect,
@@ -445,7 +596,7 @@ def compute_discrimination(
     return {
         "variant": variant,
         "target": target,
-        "n_scored": len(pairs),
+        "n_scored": len(scored),
         "n_excluded": n_excluded,
         "n_correct": n_correct,
         "n_incorrect": n_incorrect,
@@ -454,6 +605,6 @@ def compute_discrimination(
         # Positive means confidence carries signal; negative means the model is
         # most confident exactly when it is wrong, which is worse than useless.
         "separation": mean_correct - mean_incorrect,
-        "auroc": _auroc(pairs),
+        "auroc": _auroc(scored),
         "undefined_reason": None,
     }
