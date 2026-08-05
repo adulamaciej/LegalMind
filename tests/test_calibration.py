@@ -10,6 +10,7 @@ from evaluation.calibration import (
     _midranks,
     compute_calibration,
     compute_discrimination,
+    error_detection_rate,
     normalize_confidence,
 )
 
@@ -437,6 +438,191 @@ def test_discrimination_differs_by_target():
     assert compute_discrimination(rows, target="violation")["separation"] is None
     # exact: case 0 correct at 95, case 1 wrong at 60 -> clean separation
     assert compute_discrimination(rows, target="exact")["separation"] == pytest.approx(0.35)
+
+
+# --- error_detection_rate ---
+
+DETECTION_KEYS = {
+    "variant", "target", "n_scored", "n_excluded", "n_errors",
+    "undefined_reason", "budgets",
+}
+
+BUDGET_KEYS = {
+    "review_fraction", "n_reviewed", "errors_caught", "detection_rate",
+    "random_baseline", "lift", "boundary_ties",
+}
+
+
+def graded_rows(spec):
+    """Rows from [(confidence, is_correct), ...], one case_id each."""
+    return [
+        make_row(i, confidence, violation=True, truth_violation=bool(ok))
+        for i, (confidence, ok) in enumerate(spec)
+    ]
+
+
+def test_detection_empty_results_returns_full_schema():
+    result = error_detection_rate([], target="violation")
+    assert set(result) == DETECTION_KEYS
+    assert result["n_errors"] == 0
+    assert result["undefined_reason"] == "no scoreable cases"
+
+
+def test_detection_undefined_when_there_are_no_errors():
+    result = error_detection_rate(correct_rows(5, 85), target="violation")
+    assert result["undefined_reason"] == "no errors to detect"
+    assert all(b["detection_rate"] is None for b in result["budgets"])
+    assert all(b["lift"] is None for b in result["budgets"])
+
+
+def test_detection_budget_shape_is_stable():
+    result = error_detection_rate(
+        graded_rows([(60, 0), (90, 1)]), target="violation"
+    )
+    assert all(set(b) == BUDGET_KEYS for b in result["budgets"])
+
+
+def test_detection_perfect_ranking_catches_every_error_in_budget():
+    """4 errors at the bottom, 6 correct above; a 40% budget catches all of them."""
+    spec = [(50, 0), (55, 0), (60, 0), (65, 0)] + [(90, 1)] * 6
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.4,)
+    )
+    budget = result["budgets"][0]
+    assert result["n_errors"] == 4
+    assert budget["n_reviewed"] == 4
+    assert budget["errors_caught"] == 4
+    assert budget["detection_rate"] == pytest.approx(1.0)
+    assert budget["lift"] == pytest.approx(2.5)
+
+
+def test_detection_worked_example_from_the_docstring():
+    """10 cases, 4 errors, 30% budget = 3 cases holding 2 of the errors."""
+    spec = [(55, 0), (60, 0), (65, 1), (70, 0), (75, 1),
+            (80, 1), (85, 0), (90, 1), (95, 1), (100, 1)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.3,)
+    )
+    budget = result["budgets"][0]
+    assert result["n_errors"] == 4
+    assert budget["n_reviewed"] == 3
+    assert budget["errors_caught"] == 2
+    assert budget["detection_rate"] == pytest.approx(0.5)
+    assert budget["random_baseline"] == pytest.approx(0.3)
+    assert budget["lift"] == pytest.approx(0.5 / 0.3)
+
+
+def test_detection_lift_below_one_when_confidence_is_anticorrelated():
+    """Errors sit at the top, so reviewing the least-confident cases is worse
+    than random — triage built on this confidence would be harmful."""
+    spec = [(60, 1)] * 6 + [(90, 0), (92, 0), (94, 0), (96, 0)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.4,)
+    )
+    budget = result["budgets"][0]
+    assert budget["errors_caught"] == 0
+    assert budget["lift"] == pytest.approx(0.0)
+
+
+def test_detection_lift_is_one_when_errors_are_evenly_spread():
+    """Alternating correct/incorrect: sorting by confidence buys nothing."""
+    spec = [(50, 0), (60, 1), (70, 0), (80, 1), (90, 0), (100, 1)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(1 / 3,)
+    )
+    budget = result["budgets"][0]
+    assert budget["n_reviewed"] == 2
+    assert budget["errors_caught"] == 1
+    assert budget["lift"] == pytest.approx(1.0)
+
+
+def test_detection_budget_rounds_up_so_it_is_never_empty():
+    """10% of 15 cases is 1.5 — rounding down would review nobody."""
+    spec = [(50 + i, i % 3 == 0) for i in range(15)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.1,)
+    )
+    assert result["budgets"][0]["n_reviewed"] == 2
+
+
+def test_detection_budget_never_exceeds_the_sample():
+    result = error_detection_rate(
+        graded_rows([(60, 0), (90, 1)]), target="violation", review_fractions=(1.0,)
+    )
+    assert result["budgets"][0]["n_reviewed"] == 2
+    assert result["budgets"][0]["detection_rate"] == pytest.approx(1.0)
+
+
+def test_detection_flags_ties_across_the_budget_boundary():
+    """Four cases tied at 85 with a 2-case budget: which two is arbitrary, so the
+    number must not be presented as reproducible."""
+    spec = [(85, 0), (85, 0), (85, 1), (85, 1), (95, 1)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.4,)
+    )
+    assert result["budgets"][0]["boundary_ties"] is True
+
+
+def test_detection_does_not_flag_ties_when_boundary_is_clean():
+    spec = [(60, 0), (60, 0), (90, 1), (90, 1)]
+    result = error_detection_rate(
+        graded_rows(spec), target="violation", review_fractions=(0.5,)
+    )
+    assert result["budgets"][0]["boundary_ties"] is False
+
+
+def test_detection_is_order_independent():
+    """Same cases shuffled must give the same answer."""
+    spec = [(55, 0), (60, 0), (65, 1), (70, 0), (75, 1), (80, 1)]
+    forward = error_detection_rate(graded_rows(spec), target="violation")
+    backward = error_detection_rate(
+        list(reversed(graded_rows(spec))), target="violation"
+    )
+    assert forward["budgets"] == backward["budgets"]
+
+
+def test_detection_budgets_are_sorted_ascending():
+    result = error_detection_rate(
+        graded_rows([(60, 0), (70, 1), (80, 0), (90, 1)]),
+        target="violation",
+        review_fractions=(0.5, 0.25),
+    )
+    fractions = [b["review_fraction"] for b in result["budgets"]]
+    assert fractions == sorted(fractions)
+
+
+def test_detection_counts_exclusions():
+    rows = graded_rows([(60, 0), (90, 1)]) + [make_row(99, "high")]
+    result = error_detection_rate(rows, target="violation")
+    assert result["n_scored"] == 2
+    assert result["n_excluded"] == 1
+
+
+def test_detection_survives_rows_without_a_case_id():
+    """case_id is only a tiebreaker, so a row missing it must not raise."""
+    rows = graded_rows([(85, 0), (85, 1)])
+    for row in rows:
+        del row["case_id"]
+    result = error_detection_rate(rows, target="violation", review_fractions=(0.5,))
+    assert result["n_scored"] == 2
+
+
+def test_detection_rejects_invalid_review_fraction():
+    rows = graded_rows([(60, 0), (90, 1)])
+    with pytest.raises(ValueError, match="review_fractions"):
+        error_detection_rate(rows, target="violation", review_fractions=(0.0,))
+    with pytest.raises(ValueError, match="review_fractions"):
+        error_detection_rate(rows, target="violation", review_fractions=(1.5,))
+
+
+def test_detection_rejects_unknown_target():
+    with pytest.raises(ValueError, match="unknown target"):
+        error_detection_rate(correct_rows(1, 85), target="nonsense")
+
+
+def test_detection_rejects_old_results_file():
+    with pytest.raises(ValueError, match="predates calibration support"):
+        error_detection_rate([{"case_id": 1, "exact_a": True}], target="violation")
 
 
 def test_variant_b_scored_independently():

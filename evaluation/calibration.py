@@ -46,6 +46,14 @@ auroc          Probability that a random correct case outscores a random
                0.5 is anti-correlated. Unlike ECE it is base-rate independent,
                which makes it the right metric for comparing targets.
 
+Both of those say whether a signal exists. error_detection_rate says what the
+signal is worth: review the least-confident k% of verdicts and it reports what
+share of all errors that catches. Picking the same number of cases at random
+would catch k% of errors, so the random baseline is exactly review_fraction and
+`lift` = detection_rate / review_fraction. A lift above 1 means triage beats
+guessing; below 1 means it is actively harmful, because the reviewed cases are
+disproportionately the good ones.
+
 Caveats
 -------
 ECE is NOT comparable across targets with different base rates, so it must not
@@ -61,6 +69,8 @@ is. Both are None when every case fell on the same side.
 it means ECE collapses to |overconfidence| and carries no extra information,
 and that confidence is useless for telling easy cases from hard ones.
 """
+
+from math import ceil
 
 TARGETS = ("violation", "exact", "any_correct")
 
@@ -288,6 +298,93 @@ def compute_calibration(
         "uninformative_target": len(set(outcomes)) < 2,
         "distinct_confidence_values": sorted(round(c * 100, 4) for c in set(confidences)),
         "bins": bins,
+    }
+
+
+def error_detection_rate(
+    results: list[dict],
+    variant: str = "a",
+    target: str = "violation",
+    review_fractions: tuple[float, ...] = (0.1, 0.2, 0.3),
+) -> dict:
+    """
+    If a human reviews the least-confident k% of verdicts, what share of the
+    errors does that catch?
+
+    This is the decision-relevant form of discrimination, and the direct test of
+    whether judge_agent's CONFIDENCE_THRESHOLD earns its place: sorting by
+    confidence is only worth doing if it beats reviewing the same number of
+    cases at random.
+
+    Reviewing k% of cases at random catches k% of the errors in expectation, so
+    the random baseline is review_fraction itself and `lift` is the ratio
+    against it. Budgets round up, because half a case cannot be reviewed and
+    rounding down would silently produce an empty budget at small n.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
+    for fraction in review_fractions:
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError(
+                f"review_fractions must be in (0, 1], got {fraction}"
+            )
+
+    _check_schema(results, variant, target)
+
+    # Sort by confidence, then case_id, so a tie group is ordered the same way
+    # on every run rather than depending on input order.
+    scored = []
+    n_excluded = 0
+    for row in results:
+        confidence = normalize_confidence(row.get(f"confidence_{variant}"))
+        if confidence is None:
+            n_excluded += 1
+            continue
+        scored.append(
+            (confidence / 100, row.get("case_id"), _outcome(row, variant, target))
+        )
+    # str() on the tiebreaker so a row without a case_id sorts deterministically
+    # instead of raising on a None-vs-int comparison. Only determinism matters
+    # here, not the ordering being meaningful.
+    scored.sort(key=lambda item: (item[0], str(item[1])))
+
+    n = len(scored)
+    n_errors = sum(1 for _, _, outcome in scored if not outcome)
+
+    budgets = []
+    for fraction in sorted(review_fractions):
+        n_reviewed = min(n, ceil(fraction * n)) if n else 0
+        reviewed = scored[:n_reviewed]
+        caught = sum(1 for _, _, outcome in reviewed if not outcome)
+        detection_rate = caught / n_errors if n_errors else None
+        # A budget that cuts through a group of equal confidences includes an
+        # arbitrary subset of it, so the number is not reproducible under a
+        # reshuffle of the input. Flag it rather than presenting it as stable.
+        boundary_ties = (
+            0 < n_reviewed < n and scored[n_reviewed - 1][0] == scored[n_reviewed][0]
+        )
+        budgets.append(
+            {
+                "review_fraction": fraction,
+                "n_reviewed": n_reviewed,
+                "errors_caught": caught,
+                "detection_rate": detection_rate,
+                "random_baseline": fraction,
+                "lift": detection_rate / fraction if detection_rate is not None else None,
+                "boundary_ties": boundary_ties,
+            }
+        )
+
+    return {
+        "variant": variant,
+        "target": target,
+        "n_scored": n,
+        "n_excluded": n_excluded,
+        "n_errors": n_errors,
+        "undefined_reason": None if n_errors else (
+            "no scoreable cases" if n == 0 else "no errors to detect"
+        ),
+        "budgets": budgets,
     }
 
 
