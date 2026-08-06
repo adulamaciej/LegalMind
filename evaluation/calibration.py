@@ -99,6 +99,16 @@ TRACKED_TARGET_MIN_MARGIN = 0.10
 # accuracy than about calibration.
 ACCURACY_GAP_WARNING = 0.10
 
+# The three things judge_agent flags a verdict for. Deliberately kept apart:
+# the first is the model's own report about itself, the other two are our code
+# catching something the model did. OR-ing them into one boolean hides which of
+# the three, if any, actually predicts a wrong verdict.
+UNCERTAINTY_SIGNALS = (
+    ("low_confidence", "model reported confidence below the threshold"),
+    ("unsupported_article_6", "Article 6 named without fair-trial keywords"),
+    ("hallucinated", "invented article codes were filtered out"),
+)
+
 
 def normalize_confidence(raw) -> float | None:
     """
@@ -622,6 +632,100 @@ def compute_discrimination(
     }
 
 
+def signal_error_lift(
+    results: list[dict],
+    signal: str,
+    variant: str = "a",
+    target: str = "exact",
+) -> dict:
+    """
+    Does an uncertainty flag actually mark verdicts that are more often wrong?
+
+    A flag earns its place only if the verdicts it fires on are wrong more often
+    than average. `lift` is the error rate among flagged verdicts over the error
+    rate across all of them: above 1 the flag points at trouble, at 1 it is
+    uninformative, below 1 it points away from it.
+
+    `coverage` is the other half — a flag that fires once and is right about it
+    still leaves the other errors unflagged.
+
+    Also reports mean confidence on each side, which answers a question the
+    combined flag could not: does the model sound more or less certain when it
+    invents an article code?
+    """
+    field = f"{signal}_{variant}"
+    missing = [i for i, row in enumerate(results) if field not in row]
+    if missing:
+        return {
+            "signal": signal,
+            "variant": variant,
+            "target": target,
+            "n_total": len(results),
+            "n_fired": None,
+            "error_rate_when_fired": None,
+            "error_rate_overall": None,
+            "lift": None,
+            "coverage": None,
+            "mean_confidence_when_fired": None,
+            "mean_confidence_when_quiet": None,
+            "undefined_reason": (
+                f"'{field}' is absent from {len(missing)} of {len(results)} rows "
+                f"— this results file predates the split-out signals"
+            ),
+        }
+
+    _check_schema(results, variant, target)
+
+    fired, quiet = [], []
+    for row in results:
+        record = (
+            bool(row[field]),
+            _outcome(row, variant, target),
+            normalize_confidence(row.get(f"confidence_{variant}")),
+        )
+        (fired if record[0] else quiet).append(record)
+
+    n_total = len(results)
+    n_fired = len(fired)
+    n_errors_total = sum(1 for _, ok, _ in fired + quiet if not ok)
+    n_errors_fired = sum(1 for _, ok, _ in fired if not ok)
+
+    error_rate_overall = n_errors_total / n_total if n_total else None
+    error_rate_when_fired = n_errors_fired / n_fired if n_fired else None
+    lift = (
+        error_rate_when_fired / error_rate_overall
+        if error_rate_when_fired is not None and error_rate_overall
+        else None
+    )
+
+    def _mean_confidence(group):
+        values = [c for _, _, c in group if c is not None]
+        return sum(values) / len(values) / 100 if values else None
+
+    if n_fired == 0:
+        reason = "the signal never fired"
+    elif not n_errors_total:
+        reason = "no errors to point at"
+    else:
+        reason = None
+
+    return {
+        "signal": signal,
+        "variant": variant,
+        "target": target,
+        "n_total": n_total,
+        "n_fired": n_fired,
+        "error_rate_when_fired": error_rate_when_fired,
+        "error_rate_overall": error_rate_overall,
+        "lift": lift,
+        # Share of all errors this flag caught.
+        "coverage": n_errors_fired / n_errors_total if n_errors_total else None,
+        "mean_confidence_when_fired": _mean_confidence(fired),
+        "mean_confidence_when_quiet": _mean_confidence(quiet),
+        "undefined_reason": reason,
+    }
+
+
 def _fmt(value, places: int = 3, signed: bool = False) -> str:
     """Render a metric, or a dash when it is undefined. Never invents a number."""
     if value is None:
@@ -822,5 +926,54 @@ def format_calibration_report(results: list[dict], n_bins: int = 5) -> str:
     lines.append(
         f"  (decided on auroc, never ece: the targets have different base rates)"
     )
+
+    return "\n".join(lines)
+
+
+def format_uncertainty_signals_report(
+    results: list[dict],
+    variant: str = "a",
+    target: str = "exact",
+) -> str:
+    """
+    Score each of judge_agent's three uncertainty flags on its own.
+
+    The previous summary OR-ed them together and reported how many flagged
+    verdicts were correct, which could not say which flag carried the signal —
+    or whether any of them did.
+    """
+    lines = [f"=== UNCERTAINTY SIGNALS (variant {variant.upper()}, target: {target}) ==="]
+
+    if not results:
+        lines.append("No results to score.")
+        return "\n".join(lines)
+
+    lines.append("lift > 1 means the flag marks verdicts that are wrong more often than average")
+
+    for signal, description in UNCERTAINTY_SIGNALS:
+        stats = signal_error_lift(results, signal, variant, target)
+        lines.append("")
+        lines.append(f"  {signal} — {description}")
+        if stats["undefined_reason"]:
+            lines.append(
+                f"    fired on {_fmt(stats['n_fired'], 0)} of {stats['n_total']} "
+                f"— undefined: {stats['undefined_reason']}"
+            )
+            continue
+        lines.append(
+            f"    fired on {stats['n_fired']} of {stats['n_total']} verdicts"
+        )
+        lines.append(
+            f"    error rate: {_fmt(stats['error_rate_when_fired'])} when fired "
+            f"vs {_fmt(stats['error_rate_overall'])} overall "
+            f"-> lift {_fmt(stats['lift'], 2)}"
+        )
+        lines.append(
+            f"    caught {_fmt(stats['coverage'])} of all errors"
+        )
+        lines.append(
+            f"    mean confidence: {_fmt(stats['mean_confidence_when_fired'])} when "
+            f"fired vs {_fmt(stats['mean_confidence_when_quiet'])} when quiet"
+        )
 
     return "\n".join(lines)

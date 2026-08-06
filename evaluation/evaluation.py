@@ -7,7 +7,10 @@ from agents.prosecutor_agent import prosecutor_argue, prosecutor_rebut
 from agents.defender_agent import defender_argue, defender_respond
 from agents.judge_agent import judge_verdict
 from config import ARTICLE_CODES, MODEL
-from evaluation.calibration import format_calibration_report
+from evaluation.calibration import (
+    format_calibration_report,
+    format_uncertainty_signals_report,
+)
 from evaluation.results_io import DEFAULT_RESULTS_DIR, save_results
 import random
 
@@ -139,13 +142,6 @@ def run_evaluation(n_cases: int = 1, seed: int = 123, output_dir=DEFAULT_RESULTS
             row[f"hallucinated_{variant_key}"] = list(
                 verdict.get("filtered_hallucinated_codes") or []
             )
-        # Superseded by the three fields above; kept so the SELF-FLAGGED summary
-        # below keeps working until it is rewritten to read them separately.
-        row["flagged"] = bool(
-            row["low_confidence_a"]
-            or row["unsupported_article_6_a"]
-            or row["hallucinated_a"]
-        )
         results.append(row)
 
         print(f"  A: exact={'✅' if eval_a['exact_match'] else '❌'} partial={'✅' if eval_a['partial_match'] else '❌'} — {eval_a['predicted']}")
@@ -195,11 +191,8 @@ def run_evaluation(n_cases: int = 1, seed: int = 123, output_dir=DEFAULT_RESULTS
             print(f"  Article {article}: precision={precision:.2f}, recall={recall:.2f}, f1={f1:.2f} (tp={tp}, fp={fp}, fn={fn})")
 
 
-    flagged = [r for r in results if r["flagged"]]
-    if flagged:
-        flagged_correct = sum(r["exact_a"] for r in flagged)
-        print(f"\n=== SELF-FLAGGED VERDICTS ===")
-        print(f"{len(flagged)}/{n} verdicts self-flagged as uncertain; {flagged_correct}/{len(flagged)} were exact-correct")
+    print()
+    print(format_uncertainty_signals_report(results))
 
     print()
     print(format_calibration_report(results))

@@ -16,8 +16,10 @@ from evaluation.calibration import (
     compute_discrimination,
     error_detection_rate,
     format_calibration_report,
+    format_uncertainty_signals_report,
     normalize_confidence,
     sign_test,
+    signal_error_lift,
 )
 
 
@@ -1030,6 +1032,142 @@ def test_report_flags_tied_review_budgets():
     rows = [ab_row(i, 85, i < 4, 85, i < 4) for i in range(8)]
     report = format_calibration_report(rows)
     assert "!ties" in report
+
+
+# --- signal_error_lift: is each uncertainty flag worth anything? ---
+
+def signal_row(case_id, fired, correct, confidence=85, signal="low_confidence"):
+    """A case for the `exact` target, with one uncertainty flag set or clear."""
+    row = {
+        "case_id": case_id,
+        "confidence_a": confidence,
+        "predicted_a": ["6"] if correct else ["8"],
+        "violation_a": True,
+        "truth": ["6"],
+        "truth_violation": True,
+        "low_confidence_a": False,
+        "unsupported_article_6_a": False,
+        "hallucinated_a": [],
+    }
+    row[f"{signal}_a"] = ["13"] if signal == "hallucinated" and fired else bool(fired)
+    return row
+
+
+def test_signal_lift_above_one_when_the_flag_marks_bad_verdicts():
+    """4 flagged and all wrong, 6 clear and all right: the flag is perfect."""
+    rows = [signal_row(i, True, False) for i in range(4)]
+    rows += [signal_row(10 + i, False, True) for i in range(6)]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["n_fired"] == 4
+    assert stats["error_rate_when_fired"] == pytest.approx(1.0)
+    assert stats["error_rate_overall"] == pytest.approx(0.4)
+    assert stats["lift"] == pytest.approx(2.5)
+    assert stats["coverage"] == pytest.approx(1.0)
+
+
+def test_signal_lift_of_one_when_the_flag_is_uninformative():
+    """Errors split evenly across flagged and unflagged."""
+    rows = [
+        signal_row(0, True, False), signal_row(1, True, True),
+        signal_row(2, False, False), signal_row(3, False, True),
+    ]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["lift"] == pytest.approx(1.0)
+
+
+def test_signal_lift_below_one_when_the_flag_points_the_wrong_way():
+    """The flag fires on the correct verdicts — following it wastes review time."""
+    rows = [signal_row(i, True, True) for i in range(3)]
+    rows += [signal_row(10 + i, False, False) for i in range(3)]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["error_rate_when_fired"] == pytest.approx(0.0)
+    assert stats["lift"] == pytest.approx(0.0)
+
+
+def test_signal_coverage_is_reported_separately_from_lift():
+    """A flag can be perfectly precise and still miss most errors."""
+    rows = [signal_row(0, True, False)]
+    rows += [signal_row(10 + i, False, False) for i in range(3)]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["error_rate_when_fired"] == pytest.approx(1.0)
+    assert stats["coverage"] == pytest.approx(0.25)
+
+
+def test_signal_undefined_when_it_never_fires():
+    rows = [signal_row(i, False, i % 2 == 0) for i in range(4)]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["n_fired"] == 0
+    assert stats["undefined_reason"] == "the signal never fired"
+
+
+def test_signal_undefined_when_there_are_no_errors():
+    rows = [signal_row(i, i < 2, True) for i in range(4)]
+    stats = signal_error_lift(rows, "low_confidence")
+    assert stats["undefined_reason"] == "no errors to point at"
+
+
+def test_signal_reports_confidence_on_each_side():
+    """Answers a question the combined flag could not: does the model sound
+    more or less certain when it invents an article code?"""
+    rows = [signal_row(0, True, False, confidence=95, signal="hallucinated")]
+    rows += [signal_row(10 + i, False, True, confidence=70, signal="hallucinated")
+             for i in range(3)]
+    stats = signal_error_lift(rows, "hallucinated")
+    assert stats["mean_confidence_when_fired"] == pytest.approx(0.95)
+    assert stats["mean_confidence_when_quiet"] == pytest.approx(0.70)
+
+
+def test_signal_treats_a_nonempty_hallucination_list_as_fired():
+    rows = [signal_row(0, True, False, signal="hallucinated")]
+    rows += [signal_row(10 + i, False, True, signal="hallucinated") for i in range(3)]
+    stats = signal_error_lift(rows, "hallucinated")
+    assert stats["n_fired"] == 1
+
+
+def test_signal_reports_a_clear_reason_on_an_old_results_file():
+    legacy = [{"case_id": 1, "exact_a": True, "flagged": False}]
+    stats = signal_error_lift(legacy, "low_confidence")
+    assert stats["n_fired"] is None
+    assert "predates the split-out signals" in stats["undefined_reason"]
+
+
+def test_signal_handles_an_empty_batch():
+    stats = signal_error_lift([], "low_confidence")
+    assert stats["n_total"] == 0
+    assert stats["undefined_reason"] == "the signal never fired"
+
+
+# --- format_uncertainty_signals_report ---
+
+def test_uncertainty_report_covers_all_three_signals_separately():
+    """The point of the rewrite: each flag scored on its own, not OR-ed."""
+    rows = [signal_row(i, i < 2, i % 2 == 0) for i in range(6)]
+    report = format_uncertainty_signals_report(rows)
+    for signal, _ in [("low_confidence", ""), ("unsupported_article_6", ""),
+                      ("hallucinated", "")]:
+        assert signal in report
+
+
+def test_uncertainty_report_handles_empty_results():
+    assert "No results to score" in format_uncertainty_signals_report([])
+
+
+def test_uncertainty_report_is_deterministic():
+    rows = [signal_row(i, i < 2, i % 2 == 0) for i in range(6)]
+    assert (format_uncertainty_signals_report(rows)
+            == format_uncertainty_signals_report(rows))
+
+
+def test_uncertainty_report_explains_how_to_read_lift():
+    rows = [signal_row(i, i < 2, i % 2 == 0) for i in range(6)]
+    report = format_uncertainty_signals_report(rows)
+    assert "lift > 1" in report
+
+
+def test_uncertainty_report_survives_an_old_results_file():
+    legacy = [{"case_id": 1, "exact_a": True, "flagged": False}]
+    report = format_uncertainty_signals_report(legacy)
+    assert "predates the split-out signals" in report
 
 
 def test_variant_b_scored_independently():
