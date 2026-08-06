@@ -461,6 +461,222 @@ def compare_variants_paired(results: list[dict], target: str = "violation") -> d
     }
 
 
+# Heuristic thresholds for naming the target the model's confidence tracks.
+# Deliberately explicit rather than buried in the wording of a conclusion: at
+# n=15 an auroc gap of a few hundredths is noise, so a winner is only named when
+# it clears a floor AND beats the runner-up by a margin.
+TRACKED_TARGET_MIN_AUROC = 0.65
+TRACKED_TARGET_MIN_MARGIN = 0.10
+
+# Above this accuracy gap between variants, an ECE difference says more about
+# accuracy than about calibration.
+ACCURACY_GAP_WARNING = 0.10
+
+
+def _fmt(value, places: int = 3, signed: bool = False) -> str:
+    """Render a metric, or a dash when it is undefined. Never invents a number."""
+    if value is None:
+        return "—"
+    return f"{value:+.{places}f}" if signed else f"{value:.{places}f}"
+
+
+def _tracked_target(discriminations: dict) -> tuple[str | None, str, int]:
+    """
+    Which target does confidence track most closely?
+
+    Decided on auroc, never ece: auroc is base-rate independent, and the targets
+    have different base rates, so an ece ranking would mostly reflect which
+    target has the most lopsided outcome distribution.
+
+    Returns (target, reason, n_rankable). A target that clears the floor while
+    being the only rankable one has not beaten anything — the other targets were
+    unmeasurable, not worse — so n_rankable lets the caller say that instead of
+    implying a comparison that never happened.
+    """
+    ranked = sorted(
+        ((target, d["auroc"]) for target, d in discriminations.items()
+         if d["auroc"] is not None),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    n_rankable = len(ranked)
+    if not ranked:
+        return None, "no target had both correct and incorrect verdicts to rank", 0
+    best_target, best_auroc = ranked[0]
+    if best_auroc < TRACKED_TARGET_MIN_AUROC:
+        return None, (
+            f"best auroc {best_auroc:.3f} is below the "
+            f"{TRACKED_TARGET_MIN_AUROC} floor — no usable ranking signal"
+        ), n_rankable
+    if n_rankable > 1:
+        runner_up_target, runner_up_auroc = ranked[1]
+        margin = best_auroc - runner_up_auroc
+        if margin < TRACKED_TARGET_MIN_MARGIN:
+            return None, (
+                f"top two targets are within {margin:.3f} auroc, below the "
+                f"{TRACKED_TARGET_MIN_MARGIN} margin — too close to call"
+            ), n_rankable
+        return best_target, (
+            f"auroc {best_auroc:.3f}, {margin:.3f} clear of '{runner_up_target}'"
+        ), n_rankable
+    return best_target, f"auroc {best_auroc:.3f}", n_rankable
+
+
+def format_calibration_report(results: list[dict], n_bins: int = 5) -> str:
+    """
+    Render every metric for both variants across all three targets.
+
+    Output is deterministic: the same results produce the same bytes, so two
+    runs can be diffed. Nothing time-varying or dict-order-dependent goes in.
+
+    Undefined metrics collapse to a one-line reason rather than an empty table,
+    and the warnings that invalidate a reading are printed above the numbers
+    they affect rather than as a footnote.
+    """
+    lines = ["=== CONFIDENCE CALIBRATION ==="]
+
+    if not results:
+        lines.append("No results to score.")
+        return "\n".join(lines)
+
+    discriminations = {}
+
+    for target in TARGETS:
+        cal_a = compute_calibration(results, "a", target, n_bins)
+        cal_b = compute_calibration(results, "b", target, n_bins)
+        disc_a = compute_discrimination(results, "a", target)
+        disc_b = compute_discrimination(results, "b", target)
+        detect_a = error_detection_rate(results, "a", target)
+        detect_b = error_detection_rate(results, "b", target)
+        paired = compare_variants_paired(results, target)
+        discriminations[target] = disc_a
+
+        lines.append("")
+        lines.append(f"--- target: {target} ---")
+        lines.append(
+            f"scored: A={cal_a['n_scored']} B={cal_b['n_scored']} "
+            f"(excluded: A={cal_a['n_excluded']} B={cal_b['n_excluded']})"
+        )
+
+        # Warnings first — each one changes how the numbers below may be read.
+        accuracy_gap = (
+            abs(cal_a["accuracy"] - cal_b["accuracy"])
+            if cal_a["accuracy"] is not None and cal_b["accuracy"] is not None
+            else None
+        )
+        if accuracy_gap is not None and accuracy_gap > ACCURACY_GAP_WARNING:
+            lines.append(
+                f"  ! accuracy differs by {accuracy_gap:.3f} — the ece gap "
+                f"reflects accuracy, not calibration; read overconfidence instead"
+            )
+        for label, cal in (("A", cal_a), ("B", cal_b)):
+            if cal["no_discrimination"] and cal["n_scored"]:
+                lines.append(
+                    f"  ! {label}: confidence is constant at "
+                    f"{cal['distinct_confidence_values']} — ece collapses to "
+                    f"|overconfidence| and carries no extra information"
+                )
+            if cal["uninformative_target"] and cal["n_scored"]:
+                lines.append(
+                    f"  ! {label}: every scored case had the same outcome — "
+                    f"calibration against this target is uninformative"
+                )
+
+        lines.append("  calibration (unpaired)")
+        lines.append(
+            f"    {'':14}{'A':>10}{'B':>10}"
+        )
+        for label, key in (
+            ("accuracy", "accuracy"),
+            ("mean conf.", "mean_confidence"),
+            ("overconfid.", "overconfidence"),
+            ("brier", "brier"),
+            ("ece", "ece"),
+        ):
+            signed = key == "overconfidence"
+            lines.append(
+                f"    {label:14}{_fmt(cal_a[key], signed=signed):>10}"
+                f"{_fmt(cal_b[key], signed=signed):>10}"
+            )
+
+        lines.append("  discrimination (unpaired)")
+        if disc_a["undefined_reason"] and disc_b["undefined_reason"]:
+            lines.append(f"    undefined — {disc_a['undefined_reason']}")
+        else:
+            lines.append(f"    {'':14}{'A':>10}{'B':>10}")
+            lines.append(
+                f"    {'separation':14}{_fmt(disc_a['separation'], signed=True):>10}"
+                f"{_fmt(disc_b['separation'], signed=True):>10}"
+            )
+            lines.append(
+                f"    {'auroc':14}{_fmt(disc_a['auroc']):>10}"
+                f"{_fmt(disc_b['auroc']):>10}"
+            )
+
+        lines.append("  error detection at review budget (unpaired)")
+        if detect_a["undefined_reason"] and detect_b["undefined_reason"]:
+            lines.append(f"    undefined — {detect_a['undefined_reason']}")
+        else:
+            lines.append(
+                f"    {'budget':14}{'A lift':>10}{'B lift':>10}   (1.0 = no better than random)"
+            )
+            for budget_a, budget_b in zip(detect_a["budgets"], detect_b["budgets"]):
+                flag = " !ties" if budget_a["boundary_ties"] or budget_b["boundary_ties"] else ""
+                noun = "case" if budget_a["n_reviewed"] == 1 else "cases"
+                budget_label = f"{budget_a['review_fraction']:.0%} ({budget_a['n_reviewed']} {noun})"
+                lines.append(
+                    f"    {budget_label:14}{_fmt(budget_a['lift'], 2):>10}"
+                    f"{_fmt(budget_b['lift'], 2):>10}{flag}"
+                )
+
+        lines.append("  A vs B (paired — same cases, the only powered comparison)")
+        if paired["undefined_reason"]:
+            lines.append(f"    undefined — {paired['undefined_reason']}")
+        else:
+            lines.append(
+                f"    paired cases: {paired['n_paired']} "
+                f"(A scored {paired['n_scored_a']}, B scored {paired['n_scored_b']})"
+            )
+            lines.append(
+                f"    brier: A={_fmt(paired['brier_a'])} B={_fmt(paired['brier_b'])} "
+                f"delta={_fmt(paired['mean_delta'], signed=True)} "
+                f"(sd={_fmt(paired['sd_delta'])})"
+            )
+            if paired["n_decisive"]:
+                lines.append(
+                    f"    A better in {paired['favors_a']} of "
+                    f"{paired['n_decisive']} decisive cases "
+                    f"({paired['ties']} tied), sign test p="
+                    f"{_fmt(paired['sign_test_p'])}"
+                )
+            else:
+                lines.append(
+                    f"    every paired case tied — sign test undefined"
+                )
+
+    lines.append("")
+    lines.append("--- what does confidence track? ---")
+    tracked, reason, n_rankable = _tracked_target(discriminations)
+    for target in TARGETS:
+        lines.append(f"  {target:12} auroc {_fmt(discriminations[target]['auroc'])}")
+    if tracked and n_rankable > 1:
+        lines.append(f"  -> confidence tracks '{tracked}' most closely ({reason})")
+    elif tracked:
+        # Sole rankable target: it cleared the floor but beat nothing, because
+        # the others had no incorrect verdicts to rank against.
+        lines.append(
+            f"  -> '{tracked}' was the only rankable target ({reason}); the "
+            f"others had no incorrect verdicts, so no comparison was possible"
+        )
+    else:
+        lines.append(f"  -> no target clearly tracked: {reason}")
+    lines.append(
+        f"  (decided on auroc, never ece: the targets have different base rates)"
+    )
+
+    return "\n".join(lines)
+
+
 def error_detection_rate(
     results: list[dict],
     variant: str = "a",

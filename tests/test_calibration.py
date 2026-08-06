@@ -7,11 +7,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from evaluation.calibration import (
     TARGETS,
+    TRACKED_TARGET_MIN_AUROC,
+    TRACKED_TARGET_MIN_MARGIN,
     _midranks,
+    _tracked_target,
     compare_variants_paired,
     compute_calibration,
     compute_discrimination,
     error_detection_rate,
+    format_calibration_report,
     normalize_confidence,
     sign_test,
 )
@@ -844,6 +848,188 @@ def test_paired_requires_variant_b_fields():
     del row["confidence_b"]
     with pytest.raises(ValueError, match="confidence_b"):
         compare_variants_paired([row], target="violation")
+
+
+# --- _tracked_target: the rule for naming what confidence follows ---
+
+def discrimination_stub(auroc):
+    return {"auroc": auroc}
+
+
+def test_tracked_target_names_a_clear_winner():
+    target, reason, _ = _tracked_target({
+        "violation": discrimination_stub(0.82),
+        "exact": discrimination_stub(0.55),
+        "any_correct": discrimination_stub(0.60),
+    })
+    assert target == "violation"
+    assert "0.82" in reason
+
+
+def test_tracked_target_refuses_below_the_auroc_floor():
+    """A target can lead and still carry no usable signal."""
+    below = TRACKED_TARGET_MIN_AUROC - 0.05
+    target, reason, _ = _tracked_target({
+        "violation": discrimination_stub(below),
+        "exact": discrimination_stub(0.50),
+        "any_correct": discrimination_stub(0.45),
+    })
+    assert target is None
+    assert "floor" in reason
+
+
+def test_tracked_target_refuses_when_the_margin_is_too_thin():
+    """At n=15 a few hundredths of auroc is noise, not a ranking."""
+    target, reason, _ = _tracked_target({
+        "violation": discrimination_stub(0.80),
+        "exact": discrimination_stub(0.80 - TRACKED_TARGET_MIN_MARGIN / 2),
+        "any_correct": discrimination_stub(0.50),
+    })
+    assert target is None
+    assert "too close to call" in reason
+
+
+def test_tracked_target_refuses_when_nothing_is_rankable():
+    target, reason, _ = _tracked_target({
+        target: discrimination_stub(None) for target in TARGETS
+    })
+    assert target is None
+    assert "rank" in reason
+
+
+def test_tracked_target_ignores_unrankable_targets():
+    target, _, n_rankable = _tracked_target({
+        "violation": discrimination_stub(None),
+        "exact": discrimination_stub(0.90),
+        "any_correct": discrimination_stub(None),
+    })
+    assert target == "exact"
+    assert n_rankable == 1
+
+
+def test_tracked_target_reports_the_margin_when_a_comparison_happened():
+    _, reason, n_rankable = _tracked_target({
+        "violation": discrimination_stub(0.90),
+        "exact": discrimination_stub(0.70),
+        "any_correct": discrimination_stub(None),
+    })
+    assert n_rankable == 2
+    assert "clear of 'exact'" in reason
+
+
+def test_report_does_not_claim_a_win_when_only_one_target_is_rankable():
+    """The other targets were unmeasurable, not worse — saying the winner
+    'tracks most closely' would imply a comparison that never happened."""
+    rows = mixed_ab_rows()
+    report = format_calibration_report(rows)
+    assert "was the only rankable target" in report
+    assert "most closely" not in report
+
+
+def test_report_pluralises_the_review_budget():
+    rows = mixed_ab_rows()
+    report = format_calibration_report(rows)
+    assert "(1 case)" in report
+    assert "(1 cases)" not in report
+
+
+# --- format_calibration_report ---
+
+def mixed_ab_rows():
+    """A spread of confidences and outcomes that leaves most metrics defined."""
+    spec = [
+        (95, True, 60, True), (90, True, 65, False), (88, True, 70, True),
+        (85, False, 75, False), (80, True, 80, True), (75, False, 85, False),
+        (70, True, 90, True), (65, False, 95, False),
+    ]
+    return [
+        ab_row(i, conf_a, ok_a, conf_b, ok_b)
+        for i, (conf_a, ok_a, conf_b, ok_b) in enumerate(spec)
+    ]
+
+
+def test_report_handles_empty_results():
+    report = format_calibration_report([])
+    assert "No results to score" in report
+
+
+def test_report_covers_every_target():
+    report = format_calibration_report(mixed_ab_rows())
+    for target in TARGETS:
+        assert f"target: {target}" in report
+
+
+def test_report_is_deterministic():
+    """Two runs on the same results must diff clean, so nothing time-varying
+    or dict-order-dependent may leak into the text."""
+    rows = mixed_ab_rows()
+    assert format_calibration_report(rows) == format_calibration_report(rows)
+
+
+def test_report_labels_paired_and_unpaired_sections():
+    """The distinction carries the evidential weight, so it must be visible."""
+    report = format_calibration_report(mixed_ab_rows())
+    assert "paired — same cases" in report
+    assert "calibration (unpaired)" in report
+    assert "discrimination (unpaired)" in report
+
+
+def test_report_warns_when_accuracy_gap_confounds_ece():
+    rows = [ab_row(i, 85, True, 85, i < 2) for i in range(10)]
+    report = format_calibration_report(rows)
+    assert "accuracy differs by" in report
+    assert "read overconfidence instead" in report
+
+
+def test_report_omits_accuracy_warning_when_variants_agree():
+    rows = [ab_row(i, 85, i % 2 == 0, 85, i % 2 == 0) for i in range(10)]
+    report = format_calibration_report(rows)
+    assert "accuracy differs by" not in report
+
+
+def test_report_warns_about_constant_confidence():
+    rows = [ab_row(i, 85, i % 2 == 0, 85, i % 2 == 0) for i in range(8)]
+    report = format_calibration_report(rows)
+    assert "confidence is constant" in report
+    assert "carries no extra information" in report
+
+
+def test_report_warns_about_uninformative_target():
+    rows = [ab_row(i, 70 + i, True, 70 + i, True) for i in range(6)]
+    report = format_calibration_report(rows)
+    assert "every scored case had the same outcome" in report
+
+
+def test_report_renders_undefined_metrics_as_a_dash_not_a_number():
+    """All correct means discrimination is undefined; it must not print 0.000."""
+    rows = [ab_row(i, 70 + i, True, 70 + i, True) for i in range(6)]
+    report = format_calibration_report(rows)
+    assert "undefined — every scored case was correct" in report
+
+
+def test_report_states_the_tracking_conclusion():
+    report = format_calibration_report(mixed_ab_rows())
+    assert "what does confidence track?" in report
+    assert "decided on auroc, never ece" in report
+
+
+def test_report_survives_a_single_case():
+    report = format_calibration_report([ab_row(0, 85, True, 85, False)])
+    assert "target: violation" in report
+
+
+def test_report_survives_rows_with_unusable_confidence():
+    rows = mixed_ab_rows()
+    rows[0]["confidence_a"] = "high"
+    rows[1]["confidence_b"] = None
+    report = format_calibration_report(rows)
+    assert "excluded:" in report
+
+
+def test_report_flags_tied_review_budgets():
+    rows = [ab_row(i, 85, i < 4, 85, i < 4) for i in range(8)]
+    report = format_calibration_report(rows)
+    assert "!ties" in report
 
 
 def test_variant_b_scored_independently():
