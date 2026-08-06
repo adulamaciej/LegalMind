@@ -88,6 +88,18 @@ _REQUIRED_FIELDS = {
 }
 
 
+# Heuristic thresholds for naming the target the model's confidence tracks.
+# Deliberately explicit rather than buried in the wording of a conclusion: at
+# n=15 an auroc gap of a few hundredths is noise, so a winner is only named when
+# it clears a floor AND beats the runner-up by a margin.
+TRACKED_TARGET_MIN_AUROC = 0.65
+TRACKED_TARGET_MIN_MARGIN = 0.10
+
+# Above this accuracy gap between variants, an ECE difference says more about
+# accuracy than about calibration.
+ACCURACY_GAP_WARNING = 0.10
+
+
 def normalize_confidence(raw) -> float | None:
     """
     Coerce a model-supplied confidence into a percentage in [0, 100].
@@ -461,16 +473,153 @@ def compare_variants_paired(results: list[dict], target: str = "violation") -> d
     }
 
 
-# Heuristic thresholds for naming the target the model's confidence tracks.
-# Deliberately explicit rather than buried in the wording of a conclusion: at
-# n=15 an auroc gap of a few hundredths is noise, so a winner is only named when
-# it clears a floor AND beats the runner-up by a margin.
-TRACKED_TARGET_MIN_AUROC = 0.65
-TRACKED_TARGET_MIN_MARGIN = 0.10
+def error_detection_rate(
+    results: list[dict],
+    variant: str = "a",
+    target: str = "violation",
+    review_fractions: tuple[float, ...] = (0.1, 0.2, 0.3),
+) -> dict:
+    """
+    If a human reviews the least-confident k% of verdicts, what share of the
+    errors does that catch?
 
-# Above this accuracy gap between variants, an ECE difference says more about
-# accuracy than about calibration.
-ACCURACY_GAP_WARNING = 0.10
+    This is the decision-relevant form of discrimination, and the direct test of
+    whether judge_agent's CONFIDENCE_THRESHOLD earns its place: sorting by
+    confidence is only worth doing if it beats reviewing the same number of
+    cases at random.
+
+    Reviewing k% of cases at random catches k% of the errors in expectation, so
+    the random baseline is review_fraction itself and `lift` is the ratio
+    against it. Budgets round up, because half a case cannot be reviewed and
+    rounding down would silently produce an empty budget at small n.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
+    for fraction in review_fractions:
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError(
+                f"review_fractions must be in (0, 1], got {fraction}"
+            )
+
+    _check_schema(results, variant, target)
+
+    scored, n_excluded = _scored_cases(results, variant, target)
+    # Sort by confidence, then case_id, so a tie group is ordered the same way on
+    # every run rather than depending on input order. str() on the tiebreaker so
+    # a row without a case_id sorts deterministically instead of raising on a
+    # None-vs-int comparison; only determinism matters here, not the ordering
+    # being meaningful.
+    scored.sort(key=lambda item: (item[0], str(item[1])))
+
+    n = len(scored)
+    n_errors = sum(1 for _, _, outcome in scored if not outcome)
+
+    budgets = []
+    for fraction in sorted(review_fractions):
+        n_reviewed = min(n, ceil(fraction * n)) if n else 0
+        reviewed = scored[:n_reviewed]
+        caught = sum(1 for _, _, outcome in reviewed if not outcome)
+        detection_rate = caught / n_errors if n_errors else None
+        # A budget that cuts through a group of equal confidences includes an
+        # arbitrary subset of it, so the number is not reproducible under a
+        # reshuffle of the input. Flag it rather than presenting it as stable.
+        boundary_ties = (
+            0 < n_reviewed < n and scored[n_reviewed - 1][0] == scored[n_reviewed][0]
+        )
+        budgets.append(
+            {
+                "review_fraction": fraction,
+                "n_reviewed": n_reviewed,
+                "errors_caught": caught,
+                "detection_rate": detection_rate,
+                "random_baseline": fraction,
+                "lift": detection_rate / fraction if detection_rate is not None else None,
+                "boundary_ties": boundary_ties,
+            }
+        )
+
+    return {
+        "variant": variant,
+        "target": target,
+        "n_scored": n,
+        "n_excluded": n_excluded,
+        "n_errors": n_errors,
+        "undefined_reason": None if n_errors else (
+            "no scoreable cases" if n == 0 else "no errors to detect"
+        ),
+        "budgets": budgets,
+    }
+
+
+def compute_discrimination(
+    results: list[dict],
+    variant: str = "a",
+    target: str = "violation",
+) -> dict:
+    """
+    Does confidence_{variant} separate correct verdicts from incorrect ones?
+
+    Discrimination is what a triage mechanism actually needs — `low_confidence`
+    in judge_agent.py is only useful if the flagged verdicts really are the
+    wrong ones. A perfectly calibrated model with constant confidence has zero
+    discrimination and is useless for triage; a badly calibrated model that
+    ranks correctly is useful, because the threshold can just be moved.
+
+    Both metrics are undefined when every case landed on the same side (nothing
+    to separate), in which case they are None and `undefined_reason` says why.
+    The return shape never changes.
+    """
+    if target not in TARGETS:
+        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
+
+    _check_schema(results, variant, target)
+
+    scored, n_excluded = _scored_cases(results, variant, target)
+    correct = [confidence for confidence, _, outcome in scored if outcome]
+    incorrect = [confidence for confidence, _, outcome in scored if not outcome]
+    n_correct, n_incorrect = len(correct), len(incorrect)
+
+    if n_correct == 0 or n_incorrect == 0:
+        if not scored:
+            reason = "no scoreable cases"
+        elif n_incorrect == 0:
+            reason = "every scored case was correct"
+        else:
+            reason = "every scored case was incorrect"
+        return {
+            "variant": variant,
+            "target": target,
+            "n_scored": len(scored),
+            "n_excluded": n_excluded,
+            "n_correct": n_correct,
+            "n_incorrect": n_incorrect,
+            "mean_confidence_when_correct": sum(correct) / n_correct if n_correct else None,
+            "mean_confidence_when_incorrect": (
+                sum(incorrect) / n_incorrect if n_incorrect else None
+            ),
+            "separation": None,
+            "auroc": None,
+            "undefined_reason": reason,
+        }
+
+    mean_correct = sum(correct) / n_correct
+    mean_incorrect = sum(incorrect) / n_incorrect
+
+    return {
+        "variant": variant,
+        "target": target,
+        "n_scored": len(scored),
+        "n_excluded": n_excluded,
+        "n_correct": n_correct,
+        "n_incorrect": n_incorrect,
+        "mean_confidence_when_correct": mean_correct,
+        "mean_confidence_when_incorrect": mean_incorrect,
+        # Positive means confidence carries signal; negative means the model is
+        # most confident exactly when it is wrong, which is worse than useless.
+        "separation": mean_correct - mean_incorrect,
+        "auroc": _auroc(scored),
+        "undefined_reason": None,
+    }
 
 
 def _fmt(value, places: int = 3, signed: bool = False) -> str:
@@ -675,152 +824,3 @@ def format_calibration_report(results: list[dict], n_bins: int = 5) -> str:
     )
 
     return "\n".join(lines)
-
-
-def error_detection_rate(
-    results: list[dict],
-    variant: str = "a",
-    target: str = "violation",
-    review_fractions: tuple[float, ...] = (0.1, 0.2, 0.3),
-) -> dict:
-    """
-    If a human reviews the least-confident k% of verdicts, what share of the
-    errors does that catch?
-
-    This is the decision-relevant form of discrimination, and the direct test of
-    whether judge_agent's CONFIDENCE_THRESHOLD earns its place: sorting by
-    confidence is only worth doing if it beats reviewing the same number of
-    cases at random.
-
-    Reviewing k% of cases at random catches k% of the errors in expectation, so
-    the random baseline is review_fraction itself and `lift` is the ratio
-    against it. Budgets round up, because half a case cannot be reviewed and
-    rounding down would silently produce an empty budget at small n.
-    """
-    if target not in TARGETS:
-        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
-    for fraction in review_fractions:
-        if not 0.0 < fraction <= 1.0:
-            raise ValueError(
-                f"review_fractions must be in (0, 1], got {fraction}"
-            )
-
-    _check_schema(results, variant, target)
-
-    scored, n_excluded = _scored_cases(results, variant, target)
-    # Sort by confidence, then case_id, so a tie group is ordered the same way on
-    # every run rather than depending on input order. str() on the tiebreaker so
-    # a row without a case_id sorts deterministically instead of raising on a
-    # None-vs-int comparison; only determinism matters here, not the ordering
-    # being meaningful.
-    scored.sort(key=lambda item: (item[0], str(item[1])))
-
-    n = len(scored)
-    n_errors = sum(1 for _, _, outcome in scored if not outcome)
-
-    budgets = []
-    for fraction in sorted(review_fractions):
-        n_reviewed = min(n, ceil(fraction * n)) if n else 0
-        reviewed = scored[:n_reviewed]
-        caught = sum(1 for _, _, outcome in reviewed if not outcome)
-        detection_rate = caught / n_errors if n_errors else None
-        # A budget that cuts through a group of equal confidences includes an
-        # arbitrary subset of it, so the number is not reproducible under a
-        # reshuffle of the input. Flag it rather than presenting it as stable.
-        boundary_ties = (
-            0 < n_reviewed < n and scored[n_reviewed - 1][0] == scored[n_reviewed][0]
-        )
-        budgets.append(
-            {
-                "review_fraction": fraction,
-                "n_reviewed": n_reviewed,
-                "errors_caught": caught,
-                "detection_rate": detection_rate,
-                "random_baseline": fraction,
-                "lift": detection_rate / fraction if detection_rate is not None else None,
-                "boundary_ties": boundary_ties,
-            }
-        )
-
-    return {
-        "variant": variant,
-        "target": target,
-        "n_scored": n,
-        "n_excluded": n_excluded,
-        "n_errors": n_errors,
-        "undefined_reason": None if n_errors else (
-            "no scoreable cases" if n == 0 else "no errors to detect"
-        ),
-        "budgets": budgets,
-    }
-
-
-def compute_discrimination(
-    results: list[dict],
-    variant: str = "a",
-    target: str = "violation",
-) -> dict:
-    """
-    Does confidence_{variant} separate correct verdicts from incorrect ones?
-
-    Discrimination is what a triage mechanism actually needs — `low_confidence`
-    in judge_agent.py is only useful if the flagged verdicts really are the
-    wrong ones. A perfectly calibrated model with constant confidence has zero
-    discrimination and is useless for triage; a badly calibrated model that
-    ranks correctly is useful, because the threshold can just be moved.
-
-    Both metrics are undefined when every case landed on the same side (nothing
-    to separate), in which case they are None and `undefined_reason` says why.
-    The return shape never changes.
-    """
-    if target not in TARGETS:
-        raise ValueError(f"unknown target {target!r}; expected one of {TARGETS}")
-
-    _check_schema(results, variant, target)
-
-    scored, n_excluded = _scored_cases(results, variant, target)
-    correct = [confidence for confidence, _, outcome in scored if outcome]
-    incorrect = [confidence for confidence, _, outcome in scored if not outcome]
-    n_correct, n_incorrect = len(correct), len(incorrect)
-
-    if n_correct == 0 or n_incorrect == 0:
-        if not scored:
-            reason = "no scoreable cases"
-        elif n_incorrect == 0:
-            reason = "every scored case was correct"
-        else:
-            reason = "every scored case was incorrect"
-        return {
-            "variant": variant,
-            "target": target,
-            "n_scored": len(scored),
-            "n_excluded": n_excluded,
-            "n_correct": n_correct,
-            "n_incorrect": n_incorrect,
-            "mean_confidence_when_correct": sum(correct) / n_correct if n_correct else None,
-            "mean_confidence_when_incorrect": (
-                sum(incorrect) / n_incorrect if n_incorrect else None
-            ),
-            "separation": None,
-            "auroc": None,
-            "undefined_reason": reason,
-        }
-
-    mean_correct = sum(correct) / n_correct
-    mean_incorrect = sum(incorrect) / n_incorrect
-
-    return {
-        "variant": variant,
-        "target": target,
-        "n_scored": len(scored),
-        "n_excluded": n_excluded,
-        "n_correct": n_correct,
-        "n_incorrect": n_incorrect,
-        "mean_confidence_when_correct": mean_correct,
-        "mean_confidence_when_incorrect": mean_incorrect,
-        # Positive means confidence carries signal; negative means the model is
-        # most confident exactly when it is wrong, which is worse than useless.
-        "separation": mean_correct - mean_incorrect,
-        "auroc": _auroc(scored),
-        "undefined_reason": None,
-    }
