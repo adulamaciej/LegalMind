@@ -1,5 +1,5 @@
 import json
-from config import ARTICLES_MAP, ARTICLE_CODES, call_claude, MODEL
+from config import ARTICLES_MAP, ARTICLE_CODES, call_claude, MODEL, parse_json_response
 
 
 
@@ -79,19 +79,7 @@ Return ONLY a JSON object with these fields:
 
 Return ONLY the JSON, no other text."""
 
-    text_response = call_claude(prompt, model=MODEL, max_tokens=2000).strip()
-    if text_response.startswith("```"):
-        text_response = text_response.split("```")[1]
-    if text_response.startswith("json"):
-        text_response = text_response[4:]
-    text_response = text_response.strip()
-
-    try:
-        result = json.loads(text_response)
-    except json.JSONDecodeError as e:
-        print(f"Failed to parse JSON: {e}\nRaw response: {text_response}")
-        raise
-
+    result = parse_json_response(call_claude(prompt, model=MODEL, max_tokens=2000))
 
     CONFIDENCE_THRESHOLD = 70
     FAIR_TRIAL_KEYWORDS = ["legal representation", "disclosure", "impartial", "adversarial", "equality of arms"]

@@ -54,6 +54,31 @@ Full analysis in `notebooks/eda.ipynb`.
 Haiku 4.5 gave noticeably lower exact-match accuracy than Sonnet 5 across evaluation batches, suggesting model capability — not just prompting — drove verdict quality. This motivated routing  to Sonnet 5 despite higher API cost.
 
 
+## RAG-stage evaluation
+
+**Metrics** — in `evaluation/rag_metrics.py`, reported per-case and in aggregate by `evaluation/evaluation.py`, persisted to `evaluation/results.json` (reproducible):
+
+| Metric | What it measures | Cost |
+|---|---|---|
+| **precision@k** | Of the *k* retrieved precedents, the fraction sharing ≥1 violated article with the query case (dataset labels, no LLM). No-violation query cases are excluded — precision is undefined there, not zero. | free |
+| **similarity ↔ relevance correlation** | Point-biserial correlation between cosine similarity and label-overlap relevance — does vector similarity actually predict legal relevance? | free |
+| **ungrounded article codes** | Article codes cited in the analysis that no retrieved precedent's labels support (regex + set arithmetic). | free |
+| **faithfulness** | LLM-as-judge (`JUDGE_MODEL`, default Sonnet 5, kept separate from the pipeline model): splits the analysis into atomic claims and scores the fraction directly supported by the retrieved precedent text. Truncated judge responses are salvaged, not discarded. | 1 judge call / case |
+
+**Retrieval-pipeline changes driven by these metrics:**
+- **Chunked index** — one embedding per 3-paragraph chunk (was: first 10 paragraphs of each case as one vector). ECHR fact sections open with procedural boilerplate and the default MiniLM embedder truncates at ~256 word-pieces, so the discriminative facts never reached the vector. ~63k chunks vs 9k case-docs.
+- **Query on extracted facts** — retrieval queries with the Facts Agent's summary + key events + alleged violations, not the raw opening paragraphs.
+- **Case-level retrieval** — over-fetch chunk hits, collapse to distinct cases scored by best-matching chunk, return the top chunks as context.
+- **Grounded precedent analysis** — `analyze_precedents` now receives 1500 chars/precedent (matching what the faithfulness judge sees) and is told to use only the shown excerpts, no outside ECHR knowledge.
+
+**Run:**
+```bash
+python rag/indexer.py    # re-index — chunked schema; delete data/chroma first if it exists
+python eval.py           # 20 cases, faithfulness judge on; writes evaluation/results.json
+```
+`eval.py` loads `.env` before importing the pipeline. Numbers remain small-sample — directional, not definitive.
+
+
 ## Setup
 
 ```bash
@@ -61,7 +86,7 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=your-api-key
-python rag/indexer.py   # one-time: index all 9,000 training cases into ChromaDB
+python rag/indexer.py   # one-time: chunk + index all 9,000 training cases into ChromaDB
 ```
 
 ## Usage
@@ -70,7 +95,7 @@ python rag/indexer.py   # one-time: index all 9,000 training cases into ChromaDB
 streamlit run app.py              # Web UI
 python main.py --example 5        # CLI: dataset example
 python main.py --text "..."       # CLI: custom case
-python evaluation/evaluation.py   # Run evaluation
+python eval.py                    # Run evaluation (verdict A/B + RAG-stage metrics)
 pytest tests/ -v                  # Run unit tests
 ```
 
@@ -84,6 +109,6 @@ A `Dockerfile` is included for containerized deployment.
 
 - Small evaluation sample (API cost constraints) — larger-scale testing needed for confidence
 
-- RAG-precedent hypothesis not rigorously tested at scale; retrieval is pure semantic similarity (first 10 paragraphs), lacking legal-structure-aware ranking
+- RAG-precedent hypothesis not rigorously tested at scale; retrieval is chunked semantic similarity over extracted case facts (see *RAG-stage evaluation*), still lacking legal-structure-aware ranking or cross-encoder re-ranking
 
 - Rare-class metrics (e.g. Article 9) remain statistically unreliable given low frequency in the dataset

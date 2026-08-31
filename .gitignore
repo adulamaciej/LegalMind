@@ -6,3 +6,6 @@ __pycache__/
 data/chroma/
 
 .DS_Store
+
+evaluation/results.json
+evaluation/results_old.json
