@@ -1,5 +1,5 @@
 from agents.facts_agent import extract_facts
-from agents.precedent_agent import PrecedentAgent
+from agents.precedent_agent import PrecedentAgent, build_precedent_query
 from agents.prosecutor_agent import prosecutor_argue, prosecutor_rebut
 from agents.defender_agent import defender_argue, defender_respond
 from agents.judge_agent import judge_verdict
@@ -27,7 +27,9 @@ def run_pipeline(case_paragraphs: list[str]) -> dict:
     # STEP 2: Precedent Agent (RAG)
     print("\n🔍 [2/5] Precedent Agent — searching for precedents...")
     precedent_agent = PrecedentAgent()
-    precedents = precedent_agent.find_precedents(case_paragraphs)
+    precedents = precedent_agent.find_precedents(
+        case_paragraphs, query_text=build_precedent_query(facts)
+    )
     precedent_analysis = precedent_agent.analyze_precedents(case_paragraphs, precedents)
     print(f"✅ Found {len(precedents)} precedents")
     

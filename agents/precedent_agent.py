@@ -1,17 +1,18 @@
-import ast
-
 from rag.indexer import get_collection, index_cases
 from rag.retriever import find_similar_cases
-from config import call_claude, MODEL, ARTICLE_CODES
+from config import call_claude, MODEL, labels_to_articles
 
 
-def _labels_to_articles(labels_str: str) -> list[str]:
-    """Convert a stored '[0, 5]' label-index string back into article codes."""
-    try:
-        indices = ast.literal_eval(labels_str)
-        return [ARTICLE_CODES[i] for i in indices]
-    except (ValueError, SyntaxError, IndexError):
-        return []
+def build_precedent_query(facts: dict) -> str:
+    """Build a retrieval query from the extracted facts rather than raw paragraphs.
+
+    The raw opening paragraphs of an ECHR case are mostly procedural; the facts
+    summary, key events and alleged violations are the discriminative signal.
+    """
+    parts = [facts.get("summary", "")]
+    parts += facts.get("key_events", []) or []
+    parts += facts.get("alleged_violations", []) or []
+    return " ".join(p for p in parts if p).strip()
 
 
 class PrecedentAgent:
@@ -28,13 +29,15 @@ class PrecedentAgent:
         """Index cases into ChromaDB."""
         index_cases(cases, self.collection)
 
-    def find_precedents(self, case_facts: list[str], n_results: int = 3) -> list[dict]:
+    def find_precedents(
+        self, case_facts: list[str], n_results: int = 3, query_text: str | None = None
+    ) -> list[dict]:
         """
         Find similar cases to given facts.
-        Input: list of fact paragraphs
+        Input: list of fact paragraphs, optionally an explicit query string
         Output: list of similar cases
         """
-        return find_similar_cases(case_facts, self.collection, n_results)
+        return find_similar_cases(case_facts, self.collection, n_results, query_text=query_text)
 
     def analyze_precedents(self, case_facts: list[str], precedents: list[dict]) -> str:
         """
@@ -42,9 +45,9 @@ class PrecedentAgent:
         Output: string with precedent analysis
         """
         facts_text = " ".join(case_facts[:5])
-        precedents_text = "\n".join([
-            f"Precedent {i+1} (violated articles: {_labels_to_articles(p['labels'])}, "
-            f"similarity: {p['similarity']:.3f}): {p['text'][:200]}..."
+        precedents_text = "\n\n".join([
+            f"Precedent {i+1} (violated articles: {labels_to_articles(p['labels'])}, "
+            f"similarity: {p['similarity']:.3f}):\n{p['text'][:1500]}"
             for i, p in enumerate(precedents)
         ])
 
@@ -56,9 +59,14 @@ CURRENT CASE FACTS:
 SIMILAR PRECEDENTS FOUND:
 {precedents_text}
 
-Analyze how these precedents are relevant to the current case.
-What articles were violated in similar cases?
-How should these precedents influence the current case analysis?
+Analyze how these precedents are relevant to the current case:
+- What articles were violated in similar cases?
+- How should these precedents influence the current case analysis?
+
+Ground rules:
+- Base your analysis ONLY on the precedent excerpts and current case facts shown above.
+- Do not use outside knowledge of ECHR case law or case names.
+- Do not assert anything about a precedent that is not present in its excerpt.
 
 Provide a concise analysis in 3-4 sentences."""
 
