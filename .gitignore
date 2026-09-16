@@ -5,4 +5,8 @@ __pycache__/
 
 data/chroma/
 
+# Evaluation batches are timestamped and accumulate on every run. Commit a
+# canonical one by hand when it backs a documented result.
+evaluation/results/
+
 .DS_Store
