@@ -35,17 +35,7 @@ Facts → Precedent (RAG) → Debate (Prosecutor ↔ Defender) → Judge → Ver
 
 Full analysis in `notebooks/eda.ipynb`.
 
-## Research question & evaluation
-
-
-**Hypothesis:** Does adversarial debate improve verdict accuracy vs. judge ruling on facts + precedents alone? Tested via two variants: **A** (full pipeline) vs. **B** (no debate).
-
-**Results (pilot, random test cases, budget-constrained):**
-- Debate usually didn't change the verdict — A and B matched in most cases
-- In a few cases, debate corrected over-predicted articles (e.g., dropped a spurious Article 6 flag)
-- Partial match (≥1 correct article) was consistently high (66–100%); exact match varied more, reflecting a tendency to over-predict extra articles
-- **Limitation:** sample size is too small for statistical confidence — a pilot finding, not a definitive answer
-
+## 
 **Debugging highlights:**
 - Judge occasionally hallucinated non-existent article codes (e.g. "13") → fixed with explicit allowed-codes list in prompt + code-level filtering
 - Judge showed Article 6 bias (predicted by EDA's class imbalance finding) → initial prompt fix overcorrected into false negatives → rebalanced for accuracy on both sides
@@ -83,7 +73,3 @@ A `Dockerfile` is included for containerized deployment.
 ## Known limitations / future work
 
 - Small evaluation sample (API cost constraints) — larger-scale testing needed for confidence
-
-- RAG-precedent hypothesis not rigorously tested at scale; retrieval is pure semantic similarity (first 10 paragraphs), lacking legal-structure-aware ranking
-
-- Rare-class metrics (e.g. Article 9) remain statistically unreliable given low frequency in the dataset
